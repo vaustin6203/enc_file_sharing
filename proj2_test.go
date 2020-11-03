@@ -41,6 +41,31 @@ func TestInit(t *testing.T) {
 	// You probably want many more tests here.
 }
 
+//Tests if properly returns error if try to 
+//initialize a username already in existence 
+func TestUserExists(t *testing.T) {
+	clear()
+	t.Log("Initialization test")
+
+	// You can set this to false!
+	userlib.SetDebugStatus(true)
+
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		// t.Error says the test fails
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	_, err1 := InitUser("alice", "fubar1")
+	if err1 == nil {
+		t.Error("Failed: Initialized 2 users with same username")
+		return
+	}
+
+	t.Log("Got error", err)
+}
+
 func TestStorage(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")

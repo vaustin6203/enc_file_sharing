@@ -82,13 +82,103 @@ func bytesToUUID(data []byte) (ret uuid.UUID) {
 	return
 }
 
+//Helper function: given a user's password and username,
+//returns the UUID, HMACKey, and Symmetric Key of the user
+func getUserKeys(password string, username string) (UUID uuid.UUID, HMACKey []byte, SymKey []byte, err error) {
+	salt := userlib.Hash([]byte(username))
+	var bsalt []byte = salt[:]
+
+	RootKey := userlib.Argon2Key([]byte(password), bsalt, 16)
+	UUID, err = uuid.FromBytes(RootKey)
+
+	HMACKey, err = userlib.HashKDF(RootKey, []byte("user hmac key"))
+	if err != nil {
+		return UUID, nil, nil, err
+	}
+
+	SymKey, err = userlib.HashKDF(RootKey, []byte("user sym key"))
+	if err != nil {
+		return UUID, nil, nil, err
+	}
+
+	return UUID, HMACKey[:16], SymKey[:16], nil
+}
+
+//Helper function: returns true if username already exists 
+func userExists(username string) (exists bool) {
+	_, exists = userlib.KeystoreGet(username)
+	return exists
+}
+
+//Helper function: pads data for sym cryptography 
+//uses method decribed in lecture (slide 25)
+//returns the length/value that the data was padded with
+//source: https://cs161.org/assets/lectures/lec06.pdf
+func padData(data []byte) (PaddedData []byte){
+	r := userlib.AESBlockSize - (len(data) % userlib.AESBlockSize)
+	pad := byte(r)
+	PaddedData = data
+
+	//if size is equal to zero, pad a full block with 0
+	if r == 0 {
+		r = userlib.AESBlockSize
+	}
+
+	for i := 0; i < r; i++ {
+		PaddedData = append(PaddedData, pad)
+	}
+
+	return PaddedData
+}
+
+//Helper function: adds data to DataStore
+//Note: data arg must already be marshalled 
+func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (err error) {
+	iv := userlib.RandomBytes(userlib.AESBlockSize)
+	PaddedData := padData(data)
+	EncData := userlib.SymEnc(SymKey, iv, PaddedData)
+
+	mac, err := userlib.HMACEval(HMACKey, EncData)
+	if err != nil {
+		return err
+	}
+
+	Package := [][]byte{EncData, mac}
+	mPackage, err := json.Marshal(Package)
+	if err != nil {
+		return err
+	}
+
+	userlib.DatastoreSet(UUID, mPackage)
+
+	return nil
+}
+
 // The structure definition for a user record
 type User struct {
 	Username string
-
+	Password string
+	SignKey userlib.DSSignKey
+	RSADecKey userlib.PKEDecKey
+	Files map[string][]byte 
+	SharedFiles map[string][]byte
 	// You can add other fields here if you want...
 	// Note for JSON to marshal/unmarshal, the fields need to
 	// be public (start with a capital letter)
+}
+
+//file record
+type File struct {
+	Username string
+	ShareTree map[string][]byte
+}
+
+
+//a record of a shared file between 2 users 
+type Share struct {
+	UUID uuid.UUID
+	RSADecKey userlib.PKEDecKey
+	HMACKey []byte
 }
 
 // This creates a user.  It will only be called once for a user
@@ -107,12 +197,41 @@ type User struct {
 // the attackers may possess a precomputed tables containing
 // hashes of common passwords downloaded from the internet.
 func InitUser(username string, password string) (userdataptr *User, err error) {
+	if userExists(username) {
+		return nil, errors.New("username already exists")
+	}
+
 	var userdata User
 	userdataptr = &userdata
 
-	//TODO: This is a toy implementation.
 	userdata.Username = username
-	//End of toy implementation
+	userdata.Password = password
+
+	SignKey, VerifyKey, err := userlib.DSKeyGen()
+	userdata.SignKey = SignKey
+	err = userlib.KeystoreSet(username, VerifyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	RSAEncKey, RSADecKey, err := userlib.PKEKeyGen()
+	userdata.RSADecKey = RSADecKey
+	err = userlib.KeystoreSet(username + "RSA", RSAEncKey)
+	if err != nil {
+		return nil, err
+	}
+
+	UUID, HMACKey, SymKey, err := getUserKeys(username, password)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(userdata)
+	if err != nil {
+		return nil, err
+	}
+
+	err = add2Datastore(UUID, HMACKey, SymKey, data)
 
 	return &userdata, nil
 }
