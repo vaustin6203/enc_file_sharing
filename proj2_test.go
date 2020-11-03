@@ -63,7 +63,45 @@ func TestUserExists(t *testing.T) {
 		return
 	}
 
-	t.Log("Got error", err)
+	t.Log("Got error", err1)
+}
+
+//Tests if able to properly retreive a user from Datastore
+//and if able to create more than one instance of same user 
+func TestUserGet(t *testing.T) {
+	clear()
+
+	// You can set this to false!
+	userlib.SetDebugStatus(true)
+
+	u, _ := InitUser("alice", "fubar")
+
+	get_u, err := GetUser("alice", "fubar")
+
+	if err != nil {
+		t.Log("Got error", err)
+		return
+	}
+
+	if !reflect.DeepEqual(u, get_u) {
+		t.Error("initialized and stored user are not equal")
+		t.Log("Got user", get_u)
+		return 
+	}
+
+	get_u1, err := GetUser("alice", "fubar")
+
+	if err != nil {
+		t.Log("Got error on 2nd GetUser", err)
+		return
+	}
+
+	if !reflect.DeepEqual(get_u1, get_u) {
+		t.Error("2 instances of stored user are not equal")
+		t.Log("Got user", get_u1)
+		return 
+	}
+
 }
 
 func TestStorage(t *testing.T) {

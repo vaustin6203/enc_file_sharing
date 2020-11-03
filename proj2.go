@@ -131,6 +131,15 @@ func padData(data []byte) (PaddedData []byte){
 	return PaddedData
 }
 
+//Helper function: removes padding from decrypted data
+//retreived from Datastore
+func dePadData(data []byte) (unPaddedData []byte) {
+	length := len(data)
+	last := int(data[length -1])
+	unPaddedData = data[:length - last]
+	return unPaddedData
+}
+
 //Helper function: adds data to DataStore
 //Note: data arg must already be marshalled 
 func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (err error) {
@@ -152,6 +161,13 @@ func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (
 	userlib.DatastoreSet(UUID, mPackage)
 
 	return nil
+}
+
+//Helper function: verifies integrity of data loaded from Datastore
+//returns false if data has been tampered with
+func checkIntegrity(data []byte, mac []byte, HMACKey []byte) (ok bool) {
+	VerifyMAC, _ := userlib.HMACEval(HMACKey, data)
+	return userlib.HMACEqual(mac, VerifyMAC)
 }
 
 // The structure definition for a user record
@@ -242,6 +258,33 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 func GetUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
 	userdataptr = &userdata
+
+	UUID, HMACKey, SymKey, err := getUserKeys(username, password)
+	if err != nil {
+		return nil, err
+	}
+
+	data, ok := userlib.DatastoreGet(UUID)
+	if !ok {
+		return nil, errors.New("user does not exist")
+	}
+
+	var Package [][]byte 
+	err = json.Unmarshal(data, &Package)
+	if err != nil {
+		return nil, err
+	}
+
+	if !checkIntegrity(Package[0], Package[1], HMACKey) {
+		return nil, errors.New("unable to verify integirty of user data")
+	}
+
+	DecData := userlib.SymDec(SymKey, Package[0])
+	unPaddedData := dePadData(DecData)
+	err = json.Unmarshal(unPaddedData, userdataptr)
+	if err != nil {
+		return nil, err
+	}
 
 	return userdataptr, nil
 }
