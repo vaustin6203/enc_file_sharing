@@ -91,16 +91,37 @@ func uuidToBytes(UUID uuid.UUID) (ret []byte) {
 
 // Helper function: Takes the first 16 bytes and
 // converts it into the PKEDecKey type
-func bytesToRSA(data []byte) (ret userlib.PKEDecKey) {
+func bytesToRSADec(data []byte) (ret userlib.PKEDecKey) {
 	json.Unmarshal(data, &ret)
 	return ret
 }
 
 
 // Helper function: Takes UUID and convertes to []byte
-func rsaToBytes(key userlib.PKEDecKey) (ret []byte) {
+func rsaDecToBytes(key userlib.PKEDecKey) (ret []byte) {
 	ret, _ = json.Marshal(key)
 	return ret
+}
+
+// Helper function: Takes the first 16 bytes and
+// converts it into the PKEDecKey type
+func bytesToRSAEnc(data []byte) (ret userlib.PKEEncKey) {
+	json.Unmarshal(data, &ret)
+	return ret
+}
+
+
+// Helper function: Takes UUID and convertes to []byte
+func rsaEncToBytes(key userlib.PKEEncKey) (ret []byte) {
+	ret, _ = json.Marshal(key)
+	return ret
+}
+
+//Helper function: generates an HMAC key from a random number
+func genHMACKey()(HMACKey []byte) {
+	RootKey := userlib.RandomBytes(16)
+	HMACKey, _ = userlib.HashKDF(RootKey, []byte("file hmac key"))
+	return HMACKey
 }
 
 //Helper function: given a user's password and username,
@@ -360,17 +381,16 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
 	if mapEntry != nil {
 		UUID := bytesToUUID(mapEntry[0])
-		RSADecKey := bytesToRSA(mapEntry[1])
-		HMACKey := mapEntry[2]
-		key := userlib.Hash(mapEntry[0])
-		RSAEncKey, _ := userlib.KeystoreGet(string(key[:16]))
+		RSADecKey := bytesToRSADec(mapEntry[1])
+		RSAEncKey := bytesToRSAEnc(mapEntry[2])
+		HMACKey := mapEntry[3]
 
-		//If data has lossed integrity, invalidate HMACKey so LoadFile
+		//If data has lossed integrity, change HMACKey so LoadFile
 		//will detect the loss later 
 		file, _ := userlib.DatastoreGet(UUID)
 		EncData, err := verify(file, HMACKey)
 		if err != nil {
-			HMACKey = userlib.RandomBytes(16)
+			HMACKey = genHMACKey()
 		}
 
 		DecData, _ := userlib.PKEDec(RSADecKey, EncData)
@@ -382,16 +402,13 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		userfile.ShareTree = make(map[string][][]byte)
 		UUID := uuid.New()
 		bUUID := uuidToBytes(UUID)
+		HMACKey := genHMACKey()
 
 		RSAEncKey, RSADecKey, _ := userlib.PKEKeyGen()
-		bRSADecKey := rsaToBytes(RSADecKey)
-		key := userlib.Hash(bUUID)
-		_ = userlib.KeystoreSet(string(key[:16]), RSAEncKey)
+		bRSADecKey := rsaDecToBytes(RSADecKey)
+		bRSAEncKey := rsaEncToBytes(RSAEncKey)
 
-		RootKey := userlib.RandomBytes(16)
-		HMACKey, _ := userlib.HashKDF(RootKey, []byte("file hmac key"))
-
-		userdata.Files[filename] = [][]byte{bUUID, bRSADecKey, HMACKey[:16]}
+		userdata.Files[filename] = [][]byte{bUUID, bRSADecKey, bRSAEncKey, HMACKey[:16]}
 		file, _ := json.Marshal(userfile)
 
 		addFileToDatastore(UUID, HMACKey[:16], RSAEncKey, file, data)
