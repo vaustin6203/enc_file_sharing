@@ -76,10 +76,31 @@ func someUsefulThings() {
 // Helper function: Takes the first 16 bytes and
 // converts it into the UUID type
 func bytesToUUID(data []byte) (ret uuid.UUID) {
-	for x := range ret {
-		ret[x] = data[x]
-	}
-	return
+	//for x := range ret {
+		//ret[x] = data[x]
+	//}
+	json.Unmarshal(data, &ret)
+	return ret
+}
+
+// Helper function: Takes UUID and convertes to []byte
+func uuidToBytes(UUID uuid.UUID) (ret []byte) {
+	ret, _ = json.Marshal(UUID)
+	return ret
+}
+
+// Helper function: Takes the first 16 bytes and
+// converts it into the PKEDecKey type
+func bytesToRSA(data []byte) (ret userlib.PKEDecKey) {
+	json.Unmarshal(data, &ret)
+	return ret
+}
+
+
+// Helper function: Takes UUID and convertes to []byte
+func rsaToBytes(key userlib.PKEDecKey) (ret []byte) {
+	ret, _ = json.Marshal(key)
+	return ret
 }
 
 //Helper function: given a user's password and username,
@@ -140,7 +161,7 @@ func dePadData(data []byte) (unPaddedData []byte) {
 	return unPaddedData
 }
 
-//Helper function: adds data to DataStore
+//Helper function: adds data to DataStore that uses symetric encryption
 //Note: data arg must already be marshalled 
 func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (err error) {
 	iv := userlib.RandomBytes(userlib.AESBlockSize)
@@ -163,11 +184,46 @@ func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (
 	return nil
 }
 
+//Helper function: adds data to DataStore that uses asymetric encryption
+//Note: data arg must already be marshalled 
+func addFileToDatastore(UUID uuid.UUID, HMACKey []byte, RSAEncKey userlib.PKEEncKey, file []byte, data []byte) {
+	EncFile, _ := userlib.PKEEnc(RSAEncKey, file)
+	EncData, _ := userlib.PKEEnc(RSAEncKey, data)
+
+	DataFile := [][]byte{EncData, EncFile}
+	mDataFile, _ := json.Marshal(DataFile)
+
+	mac, _ := userlib.HMACEval(HMACKey, mDataFile)
+
+	Package := [][]byte{mDataFile, mac}
+	mPackage, _ := json.Marshal(Package)
+
+	userlib.DatastoreSet(UUID, mPackage)
+
+	return
+}
+
 //Helper function: verifies integrity of data loaded from Datastore
 //returns false if data has been tampered with
 func checkIntegrity(data []byte, mac []byte, HMACKey []byte) (ok bool) {
 	VerifyMAC, _ := userlib.HMACEval(HMACKey, data)
 	return userlib.HMACEqual(mac, VerifyMAC)
+}
+
+//Helper function: determines if a filename already exists for a user
+//return map entry under filename if exists and nil otherwise 
+func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]byte, filename string) (entry [][]byte) {
+	if val, exists := filemap[filename]; exists {
+		return val
+	} else if val, exists = shared_filemap[filename]; exists {
+		return val
+	}
+	return nil
+}
+
+//Helper function: overwrites the contents of a file 
+func overwriteFile(UUID uuid.UUID, RSADecKey userlib.PKEDecKey, HMACKey []byte, data []byte) {
+
 }
 
 // The structure definition for a user record
@@ -176,8 +232,8 @@ type User struct {
 	Password string
 	SignKey userlib.DSSignKey
 	RSADecKey userlib.PKEDecKey
-	Files map[string][]byte 
-	SharedFiles map[string][]byte
+	Files map[string][][]byte 
+	SharedFiles map[string][][]byte
 	// You can add other fields here if you want...
 	// Note for JSON to marshal/unmarshal, the fields need to
 	// be public (start with a capital letter)
@@ -186,7 +242,7 @@ type User struct {
 //file record
 type File struct {
 	Username string
-	ShareTree map[string][]byte
+	ShareTree map[string][][]byte
 }
 
 
@@ -194,7 +250,6 @@ type File struct {
 type Share struct {
 	UUID uuid.UUID
 	RSADecKey userlib.PKEDecKey
-	HMACKey []byte
 }
 
 // This creates a user.  It will only be called once for a user
@@ -222,6 +277,8 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 
 	userdata.Username = username
 	userdata.Password = password
+	userdata.Files = make(map[string][][]byte)
+	userdata.SharedFiles = make(map[string][][]byte)
 
 	SignKey, VerifyKey, err := userlib.DSKeyGen()
 	userdata.SignKey = SignKey
@@ -294,12 +351,35 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 // The plaintext of the filename + the plaintext and length of the filename
 // should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
+	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	if mapEntry != nil {
+		UUID := bytesToUUID(mapEntry[0])
+		RSADecKey := bytesToRSA(mapEntry[1])
+		HMACKey := mapEntry[2]
+		updatedFile, updatedData := overwriteFile(UUID, RSADecKey, HMACKey, data)
+		key := userlib.Hash(mapEntry[0])
+		RSAEncKey, _ := userlib.KeystoreGet(string(key[:16]))
+		addFileToDatastore(UUID, HMACKey, RSAEncKey, updatedFile, updatedData)
+	} else {
+		var userfile File
+		userfile.Username = userdata.Username
+		userfile.ShareTree = make(map[string][][]byte)
+		UUID := uuid.New()
+		bUUID := uuidToBytes(UUID)
 
-	//TODO: This is a toy implementation.
-	UUID, _ := uuid.FromBytes([]byte(filename + userdata.Username)[:16])
-	packaged_data, _ := json.Marshal(data)
-	userlib.DatastoreSet(UUID, packaged_data)
-	//End of toy implementation
+		RSAEncKey, RSADecKey, _ := userlib.PKEKeyGen()
+		bRSADecKey := rsaToBytes(RSADecKey)
+		key := userlib.Hash(bUUID)
+		_ = userlib.KeystoreSet(string(key[:16]), RSAEncKey)
+
+		RootKey := userlib.RandomBytes(16)
+		HMACKey, _ := userlib.HashKDF(RootKey, []byte("file hmac key"))
+
+		userdata.Files[filename] = [][]byte{bUUID, bRSADecKey, HMACKey[:16]}
+		file, _ := json.Marshal(userfile)
+
+		addFileToDatastore(UUID, HMACKey[:16], RSAEncKey, file, data)
+	}
 
 	return
 }
