@@ -210,6 +210,22 @@ func checkIntegrity(data []byte, mac []byte, HMACKey []byte) (ok bool) {
 	return userlib.HMACEqual(mac, VerifyMAC)
 }
 
+//Helper function: for a marshalled {EncData, mac}, verifies the integrity 
+//of the encrypted data and returns it 
+func verify(data []byte, HMACKey []byte) (verfied_data []byte, err error) {
+	var Package [][]byte 
+	err = json.Unmarshal(data, &Package)
+	if err != nil {
+		return nil, err
+	}
+
+	if !checkIntegrity(Package[0], Package[1], HMACKey) {
+		return nil, errors.New("unable to verify integrity of user data")
+	}
+
+	return Package[0], nil
+}
+
 //Helper function: determines if a filename already exists for a user
 //return map entry under filename if exists and nil otherwise 
 func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]byte, filename string) (entry [][]byte) {
@@ -219,11 +235,6 @@ func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]b
 		return val
 	}
 	return nil
-}
-
-//Helper function: overwrites the contents of a file 
-func overwriteFile(UUID uuid.UUID, RSADecKey userlib.PKEDecKey, HMACKey []byte, data []byte) {
-
 }
 
 // The structure definition for a user record
@@ -326,17 +337,12 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		return nil, errors.New("user does not exist")
 	}
 
-	var Package [][]byte 
-	err = json.Unmarshal(data, &Package)
+	EncData, err := verify(data, HMACKey)
 	if err != nil {
 		return nil, err
 	}
 
-	if !checkIntegrity(Package[0], Package[1], HMACKey) {
-		return nil, errors.New("unable to verify integirty of user data")
-	}
-
-	DecData := userlib.SymDec(SymKey, Package[0])
+	DecData := userlib.SymDec(SymKey, EncData)
 	unPaddedData := dePadData(DecData)
 	err = json.Unmarshal(unPaddedData, userdataptr)
 	if err != nil {
@@ -356,10 +362,20 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		UUID := bytesToUUID(mapEntry[0])
 		RSADecKey := bytesToRSA(mapEntry[1])
 		HMACKey := mapEntry[2]
-		updatedFile, updatedData := overwriteFile(UUID, RSADecKey, HMACKey, data)
 		key := userlib.Hash(mapEntry[0])
 		RSAEncKey, _ := userlib.KeystoreGet(string(key[:16]))
-		addFileToDatastore(UUID, HMACKey, RSAEncKey, updatedFile, updatedData)
+
+		//If data has lossed integrity, invalidate HMACKey so LoadFile
+		//will detect the loss later 
+		file, _ := userlib.DatastoreGet(UUID)
+		EncData, err := verify(file, HMACKey)
+		if err != nil {
+			HMACKey = userlib.RandomBytes(16)
+		}
+
+		DecData, _ := userlib.PKEDec(RSADecKey, EncData)
+
+		addFileToDatastore(UUID, HMACKey, RSAEncKey, DecData, data)
 	} else {
 		var userfile File
 		userfile.Username = userdata.Username

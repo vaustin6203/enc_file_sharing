@@ -126,6 +126,21 @@ func TestStorage(t *testing.T) {
 	}
 }
 
+//Checks that StoreFile works properly 
+//tests if able to overwrite file with same filename
+/**func TestStoreFile(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+} */
+
 func TestInvalidFile(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
