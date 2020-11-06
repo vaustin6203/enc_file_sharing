@@ -89,39 +89,12 @@ func uuidToBytes(UUID uuid.UUID) (ret []byte) {
 	return ret
 }
 
-// Helper function: Takes the first 16 bytes and
-// converts it into the PKEDecKey type
-func bytesToRSADec(data []byte) (ret userlib.PKEDecKey) {
-	json.Unmarshal(data, &ret)
-	return ret
-}
-
-
-// Helper function: Takes UUID and convertes to []byte
-func rsaDecToBytes(key userlib.PKEDecKey) (ret []byte) {
-	ret, _ = json.Marshal(key)
-	return ret
-}
-
-// Helper function: Takes the first 16 bytes and
-// converts it into the PKEDecKey type
-func bytesToRSAEnc(data []byte) (ret userlib.PKEEncKey) {
-	json.Unmarshal(data, &ret)
-	return ret
-}
-
-
-// Helper function: Takes UUID and convertes to []byte
-func rsaEncToBytes(key userlib.PKEEncKey) (ret []byte) {
-	ret, _ = json.Marshal(key)
-	return ret
-}
-
-//Helper function: generates an HMAC key from a random number
-func genHMACKey()(HMACKey []byte) {
+//Helper function: generates an HMAC key and symmetric key from a random number
+func genFileKeys()(HMACKey []byte, SymKey []byte) {
 	RootKey := userlib.RandomBytes(16)
 	HMACKey, _ = userlib.HashKDF(RootKey, []byte("file hmac key"))
-	return HMACKey
+	SymKey, _ = userlib.HashKDF(RootKey, []byte("file sym key"))
+	return HMACKey[:16], SymKey[:16]
 }
 
 //Helper function: given a user's password and username,
@@ -209,10 +182,14 @@ func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte,
 
 //Helper function: adds data to DataStore that uses asymetric encryption
 //Note: data arg must already be marshalled 
-func addFileToDatastore(UUID uuid.UUID, HMACKey []byte, 
-	RSAEncKey userlib.PKEEncKey, file []byte, data []byte) {
-	EncFile, _ := userlib.PKEEnc(RSAEncKey, file)
-	EncData, _ := userlib.PKEEnc(RSAEncKey, data)
+func addFile2Datastore(UUID uuid.UUID, HMACKey []byte, 
+	SymKey []byte, file []byte, data []byte) {
+	iv1 := userlib.RandomBytes(userlib.AESBlockSize)
+	PaddedFile := padData(file)
+	iv2 := userlib.RandomBytes(userlib.AESBlockSize)
+	PaddedData := padData(data)
+	EncFile := userlib.SymEnc(SymKey, iv1, PaddedFile)
+	EncData := userlib.SymEnc(SymKey, iv2, PaddedData)
 
 	DataFile := [][]byte{EncData, EncFile}
 	mDataFile, _ := json.Marshal(DataFile)
@@ -225,6 +202,42 @@ func addFileToDatastore(UUID uuid.UUID, HMACKey []byte,
 	userlib.DatastoreSet(UUID, mPackage)
 
 	return
+}
+
+//Helper function: given a user's mapEntry of a file, retreives, verfies, 
+//& decrypts file and its data
+//returns error if error occurs 
+func getFile(mapEntry [][]byte) (file File, data []byte, err error) {
+	var filedata [][]byte
+	UUID := bytesToUUID(mapEntry[0])
+	HMACKey := mapEntry[1]
+	SymKey := mapEntry[2]
+
+	data, ok := userlib.DatastoreGet(UUID)
+	if !ok {
+		return file, nil, errors.New(strings.ToTitle("File not found!"))
+	}
+
+	EncData, err := verify(data, HMACKey)
+	if err != nil {
+		return file, nil, err
+	}
+
+	err = json.Unmarshal(EncData, &filedata)
+	if err != nil {
+		return file, nil, err
+	}
+
+	DecFile := userlib.SymDec(SymKey, filedata[1])
+	depadFile := dePadData(DecFile)
+	err = json.Unmarshal(depadFile, &file)
+	if err != nil {
+		return file, nil, err
+	}
+
+	DecData := userlib.SymDec(SymKey, filedata[0])
+	depadData := dePadData(DecData)
+	return file, depadData, nil
 }
 
 //Helper function: verifies integrity of data loaded from Datastore
@@ -353,6 +366,9 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	}
 
 	err = add2Datastore(UUID, HMACKey, SymKey, data)
+	if err != nil {
+		return nil, err
+	}
 
 	return &userdata, nil
 }
@@ -396,41 +412,42 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 func (userdata *User) StoreFile(filename string, data []byte) {
 	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
 	if mapEntry != nil {
-		UUID := bytesToUUID(mapEntry[0])
-		RSADecKey := bytesToRSADec(mapEntry[1])
-		RSAEncKey := bytesToRSAEnc(mapEntry[2])
-		HMACKey := mapEntry[3]
 
 		//If data has lossed integrity, change HMACKey so LoadFile
 		//will detect the loss later 
+		UUID := bytesToUUID(mapEntry[0])
+		HMACKey := mapEntry[1]
+		SymKey := mapEntry[2]
+
 		file, _ := userlib.DatastoreGet(UUID)
 		EncData, err := verify(file, HMACKey)
 		if err != nil {
-			HMACKey = genHMACKey()
+			HMACKey, SymKey = genFileKeys()
+			
 		}
 
 		var filedata [][]byte
 		_ = json.Unmarshal(EncData, &filedata)
+		DecFile := userlib.SymDec(SymKey, filedata[1])
+		depadFile := dePadData(DecFile)
 
-		DecData, _ := userlib.PKEDec(RSADecKey, filedata[1])
+		if err != nil {
+			HMACKey, SymKey = genFileKeys()
+			
+		}
 
-		addFileToDatastore(UUID, HMACKey, RSAEncKey, DecData, data)
+		addFile2Datastore(UUID, HMACKey, SymKey, depadFile, data)
 	} else {
 		var userfile File
 		userfile.Username = userdata.Username
 		userfile.ShareTree = make(map[string][][]byte)
 		UUID := uuid.New()
-		bUUID := uuidToBytes(UUID)
-		HMACKey := genHMACKey()
+		HMACKey, SymKey := genFileKeys()
 
-		RSAEncKey, RSADecKey, _ := userlib.PKEKeyGen()
-		bRSADecKey := rsaDecToBytes(RSADecKey)
-		bRSAEncKey := rsaEncToBytes(RSAEncKey)
-
-		userdata.Files[filename] = [][]byte{bUUID, bRSADecKey, bRSAEncKey, HMACKey[:16]}
+		userdata.Files[filename] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
 		file, _ := json.Marshal(userfile)
 
-		addFileToDatastore(UUID, HMACKey[:16], RSAEncKey, file, data)
+		addFile2Datastore(UUID, HMACKey, SymKey, file, data)
 	}
 
 	return
@@ -442,56 +459,28 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // existing file, but only whatever additional information and
 // metadata you need.
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
-	if mapEntry == nil {
-		return errors.New(strings.ToTitle("filename does not exist under user"))
-	}
+	// mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	// if mapEntry == nil {
+	// 	return errors.New(strings.ToTitle("filename does not exist under user"))
+	// }
 
-	UUID := bytesToUUID(mapEntry[0])
-	RSAEncKey := bytesToRSAEnc(mapEntry[2])
-	HMACKey := mapEntry[3]
+	// var filedata File
+	// UUID := bytesToUUID(mapEntry[0])
+	// HMACKey := mapEntry[1]
+	// SymKey := mapEntry[2]
 
-	file, ok := userlib.DatastoreGet(UUID)
-	if !ok {
-		return errors.New(strings.ToTitle("File not found!"))
-	}
+	// data, ok := userlib.DatastoreGet(UUID)
+	// if !ok {
+	// 	return filedata, errors.New(strings.ToTitle("File not found!"))
+	// }
 
-	EncData, err := verify(file, HMACKey)
-	if err != nil {
-		return err
-	}
+	// EncData, err := verify(data, HMACKey)
+	// if err != nil {
+	// 	return filedata, err
+	// }
 
-	var filedata [][]byte
-	err = json.Unmarshal(EncData, &filedata)
-	if err != nil {
-		return err
-	}
-
-
-	EncData, err = userlib.PKEEnc(RSAEncKey, data)
-	if err != nil {
-		return err
-	}
-
-	newData := appendData(EncData, filedata[0])
-	DataFile := [][]byte{newData, filedata[1]}
-	mDataFile, err := json.Marshal(DataFile)
-	if err != nil {
-		return err
-	}
-
-	mac, err := userlib.HMACEval(HMACKey, mDataFile)
-	if err != nil {
-		return err
-	}
-
-	Package := [][]byte{mDataFile, mac}
-	mPackage, err := json.Marshal(Package)
-	if err != nil {
-		return err
-	}
-
-	userlib.DatastoreSet(UUID, mPackage)
+	// appendedData := appendData(data, )
+	
 	return nil
 }
 
@@ -505,32 +494,11 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
-	UUID := bytesToUUID(mapEntry[0])
-	RSADecKey := bytesToRSADec(mapEntry[1])
-	HMACKey := mapEntry[3]
-
-	file, ok := userlib.DatastoreGet(UUID)
-	if !ok {
-		return nil, errors.New(strings.ToTitle("File not found!"))
-	}
-
-	EncData, err := verify(file, HMACKey)
+	_, filedata, err := getFile(mapEntry)
 	if err != nil {
 		return nil, err
 	}
-
-	var filedata [][]byte
-	err = json.Unmarshal(EncData, &filedata)
-	if err != nil {
-		return nil, err
-	}
-
-	DecData, err := userlib.PKEDec(RSADecKey, filedata[0])
-	if err != nil {
-		return nil, err
-	}
-
-	return DecData, nil
+	return filedata, nil
 }
 
 // This creates a sharing record, which is a key pointing to something

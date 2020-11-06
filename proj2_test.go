@@ -198,37 +198,37 @@ func TestInvalidFile(t *testing.T) {
 	}
 }
 
-//Ensures that AppendFile's basic functionality is working
-func TestAppendFile(t *testing.T) {
-	clear()
-	u, err := InitUser("alice", "fubar")
-	if err != nil {
-		t.Error("Failed to initialize user", err)
-		return
-	}
+// //Ensures that AppendFile's basic functionality is working
+// func TestAppendFile(t *testing.T) {
+// 	clear()
+// 	u, err := InitUser("alice", "fubar")
+// 	if err != nil {
+// 		t.Error("Failed to initialize user", err)
+// 		return
+// 	}
 
-	v := []byte("This is a test")
-	u.StoreFile("file1", v)
+// 	v := []byte("This is a test")
+// 	u.StoreFile("file1", v)
 
-	apData := []byte("this is appended data")
-	err = u.AppendFile("file1", apData)
-	if err != nil {
-		t.Error("Error while appending data:", err)
-	}
+// 	apData := []byte("this is appended data")
+// 	err = u.AppendFile("file1", apData)
+// 	if err != nil {
+// 		t.Error("Error while appending data:", err)
+// 	}
 
-	v2, err2 := u.LoadFile("file1")
-	if err2 != nil {
-		t.Error("Failed to load data after appending", err2)
-		return
-	}
+// 	v2, err2 := u.LoadFile("file1")
+// 	if err2 != nil {
+// 		t.Error("Failed to load data after appending", err2)
+// 		return
+// 	}
 
-	original := appendData(apData, v)
-	if !reflect.DeepEqual(original, v2) {
-		t.Error("appended data from Datastore is not equal to original", v2, original)
-		return
-	}
+// 	original := appendData(apData, v)
+// 	if !reflect.DeepEqual(original, v2) {
+// 		t.Error("appended data from Datastore is not equal to original", v2, original)
+// 		return
+// 	}
 
-}
+// }
 
 
 func TestShare(t *testing.T) {
