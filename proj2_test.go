@@ -155,6 +155,34 @@ func TestStoreFile(t *testing.T) {
 
 } 
 
+//Tests to make sure LoadFile does not load data that should 
+//only be accessed by one user 
+func TestLoadFile(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	u1, err := InitUser("charles", "dance")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	_, err2 := u1.LoadFile("file1")
+	if err2 == nil {
+		t.Error("Failed to recognize filename should not exist under user", err2)
+		return
+	}
+
+	t.Log("Got error", err2)
+}
+
 func TestInvalidFile(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -168,6 +196,38 @@ func TestInvalidFile(t *testing.T) {
 		t.Error("Downloaded a ninexistent file", err2)
 		return
 	}
+}
+
+//Ensures that AppendFile's basic functionality is working
+func TestAppendFile(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	apData := []byte("this is appended data")
+	err = u.AppendFile("file1", apData)
+	if err != nil {
+		t.Error("Error while appending data:", err)
+	}
+
+	v2, err2 := u.LoadFile("file1")
+	if err2 != nil {
+		t.Error("Failed to load data after appending", err2)
+		return
+	}
+
+	original := appendData(apData, v)
+	if !reflect.DeepEqual(original, v2) {
+		t.Error("appended data from Datastore is not equal to original", v2, original)
+		return
+	}
+
 }
 
 

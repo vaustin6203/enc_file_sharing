@@ -262,6 +262,18 @@ func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]b
 	return nil
 }
 
+//Helper function: appends new data to the end of a file 
+func appendData(data2append []byte, data []byte) (appendedData []byte) {
+	dataLength := len(data2append)
+	appendedData = data
+
+	for i := 0; i < dataLength; i++ {
+		appendedData = append(appendedData, data2append[i])
+	}
+
+	return appendedData
+}
+
 // The structure definition for a user record
 type User struct {
 	Username string
@@ -430,7 +442,57 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // existing file, but only whatever additional information and
 // metadata you need.
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	return
+	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	if mapEntry == nil {
+		return errors.New(strings.ToTitle("filename does not exist under user"))
+	}
+
+	UUID := bytesToUUID(mapEntry[0])
+	RSAEncKey := bytesToRSAEnc(mapEntry[2])
+	HMACKey := mapEntry[3]
+
+	file, ok := userlib.DatastoreGet(UUID)
+	if !ok {
+		return errors.New(strings.ToTitle("File not found!"))
+	}
+
+	EncData, err := verify(file, HMACKey)
+	if err != nil {
+		return err
+	}
+
+	var filedata [][]byte
+	err = json.Unmarshal(EncData, &filedata)
+	if err != nil {
+		return err
+	}
+
+
+	EncData, err = userlib.PKEEnc(RSAEncKey, data)
+	if err != nil {
+		return err
+	}
+
+	newData := appendData(EncData, filedata[0])
+	DataFile := [][]byte{newData, filedata[1]}
+	mDataFile, err := json.Marshal(DataFile)
+	if err != nil {
+		return err
+	}
+
+	mac, err := userlib.HMACEval(HMACKey, mDataFile)
+	if err != nil {
+		return err
+	}
+
+	Package := [][]byte{mDataFile, mac}
+	mPackage, err := json.Marshal(Package)
+	if err != nil {
+		return err
+	}
+
+	userlib.DatastoreSet(UUID, mPackage)
+	return nil
 }
 
 // This loads a file from the Datastore.
