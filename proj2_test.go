@@ -128,7 +128,7 @@ func TestStorage(t *testing.T) {
 
 //Checks that StoreFile works properly 
 //tests if able to overwrite file with same filename
-/**func TestStoreFile(t *testing.T) {
+func TestStoreFile(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
 	if err != nil {
@@ -139,7 +139,21 @@ func TestStorage(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-} */
+	v1 := []byte("Overwrite data")
+	u.StoreFile("file1", v1)
+
+	v2, err2 := u.LoadFile("file1")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+
+	if !reflect.DeepEqual(v1, v2) {
+		t.Error("Downloaded file is not the same", v1, v2)
+		return
+	}
+
+} 
 
 func TestInvalidFile(t *testing.T) {
 	clear()

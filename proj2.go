@@ -126,7 +126,8 @@ func genHMACKey()(HMACKey []byte) {
 
 //Helper function: given a user's password and username,
 //returns the UUID, HMACKey, and Symmetric Key of the user
-func getUserKeys(password string, username string) (UUID uuid.UUID, HMACKey []byte, SymKey []byte, err error) {
+func getUserKeys(password string, username string) (UUID uuid.UUID, 
+	HMACKey []byte, SymKey []byte, err error) {
 	salt := userlib.Hash([]byte(username))
 	var bsalt []byte = salt[:]
 
@@ -184,7 +185,8 @@ func dePadData(data []byte) (unPaddedData []byte) {
 
 //Helper function: adds data to DataStore that uses symetric encryption
 //Note: data arg must already be marshalled 
-func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (err error) {
+func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, 
+	data []byte) (err error) {
 	iv := userlib.RandomBytes(userlib.AESBlockSize)
 	PaddedData := padData(data)
 	EncData := userlib.SymEnc(SymKey, iv, PaddedData)
@@ -207,7 +209,8 @@ func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte, data []byte) (
 
 //Helper function: adds data to DataStore that uses asymetric encryption
 //Note: data arg must already be marshalled 
-func addFileToDatastore(UUID uuid.UUID, HMACKey []byte, RSAEncKey userlib.PKEEncKey, file []byte, data []byte) {
+func addFileToDatastore(UUID uuid.UUID, HMACKey []byte, 
+	RSAEncKey userlib.PKEEncKey, file []byte, data []byte) {
 	EncFile, _ := userlib.PKEEnc(RSAEncKey, file)
 	EncData, _ := userlib.PKEEnc(RSAEncKey, data)
 
@@ -249,7 +252,8 @@ func verify(data []byte, HMACKey []byte) (verfied_data []byte, err error) {
 
 //Helper function: determines if a filename already exists for a user
 //return map entry under filename if exists and nil otherwise 
-func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]byte, filename string) (entry [][]byte) {
+func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]byte, 
+	filename string) (entry [][]byte) {
 	if val, exists := filemap[filename]; exists {
 		return val
 	} else if val, exists = shared_filemap[filename]; exists {
@@ -393,7 +397,10 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 			HMACKey = genHMACKey()
 		}
 
-		DecData, _ := userlib.PKEDec(RSADecKey, EncData)
+		var filedata [][]byte
+		_ = json.Unmarshal(EncData, &filedata)
+
+		DecData, _ := userlib.PKEDec(RSADecKey, filedata[1])
 
 		addFileToDatastore(UUID, HMACKey, RSAEncKey, DecData, data)
 	} else {
@@ -431,17 +438,37 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 
-	//TODO: This is a toy implementation.
-	UUID, _ := uuid.FromBytes([]byte(filename + userdata.Username)[:16])
-	packaged_data, ok := userlib.DatastoreGet(UUID)
+	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	if mapEntry == nil {
+		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
+	}
+
+	UUID := bytesToUUID(mapEntry[0])
+	RSADecKey := bytesToRSADec(mapEntry[1])
+	HMACKey := mapEntry[3]
+
+	file, ok := userlib.DatastoreGet(UUID)
 	if !ok {
 		return nil, errors.New(strings.ToTitle("File not found!"))
 	}
-	json.Unmarshal(packaged_data, &data)
-	return data, nil
-	//End of toy implementation
 
-	return
+	EncData, err := verify(file, HMACKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var filedata [][]byte
+	err = json.Unmarshal(EncData, &filedata)
+	if err != nil {
+		return nil, err
+	}
+
+	DecData, err := userlib.PKEDec(RSADecKey, filedata[0])
+	if err != nil {
+		return nil, err
+	}
+
+	return DecData, nil
 }
 
 // This creates a sharing record, which is a key pointing to something
