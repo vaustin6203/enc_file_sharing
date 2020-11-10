@@ -180,6 +180,25 @@ func add2Datastore(UUID uuid.UUID, HMACKey []byte, SymKey []byte,
 	return nil
 }
 
+func addUser2Datastore(userdata *User) (err error) {
+	UUID, HMACKey, SymKey, err := getUserKeys(userdata.Username, userdata.Password)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(userdata)
+	if err != nil {
+		return err
+	}
+
+	err = add2Datastore(UUID, HMACKey, SymKey, data)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 //Helper function: adds data to DataStore that uses asymetric encryption
 //Note: data arg must already be marshalled 
 func addFile2Datastore(UUID uuid.UUID, HMACKey []byte, 
@@ -290,8 +309,9 @@ func decAndVerify (UUID uuid.UUID, HMACKey []byte, SymKey []byte) (data []byte, 
 	return data, nil
 }
 
-func removeAppendedData(metadata [][]byte, UUID uuid.UUID) (err error) {
-	data, err := decAndVerify(UUID, metadata[0], metadata[1])
+func removeAppendedData(metadata [][]byte) (err error) {
+	UUID := bytesToUUID(metadata[0])
+	data, err := decAndVerify(UUID, metadata[1], metadata[2])
 	userlib.DatastoreDelete(UUID)
 	if err != nil {
 		return err
@@ -313,6 +333,45 @@ func removeAppendedData(metadata [][]byte, UUID uuid.UUID) (err error) {
 	}
 
 	return nil
+}
+
+func appendData(metadata [][]byte, data []byte) (appendedData []byte, err error) {
+	UUID := bytesToUUID(metadata[0])
+	appended, err := decAndVerify(UUID, metadata[1], metadata[2])
+	if err != nil {
+		return nil, err
+	}
+
+	var appendedEntries map[int][][]byte
+	err = json.Unmarshal(appended, &appendedEntries)
+	if err != nil {
+		return nil, err
+	}
+
+	appendedData = data
+	for i := 0; i < len(appendedEntries); i++ {
+		entry := appendedEntries[i]
+		ap, err := decAndVerify(bytesToUUID(entry[0]), entry[1], entry[2])
+		if err != nil {
+			return nil, err
+		}
+		for j := 0; j < len(ap); j ++ {
+			appendedData = append(appendedData, ap[j])
+		}
+	}
+
+	return appendedData, nil
+}
+
+func getSharedFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (FileUUID uuid.UUID,
+	FileHMACKey []byte, FileSymKey []byte) {
+	sharedata, err := decAndVerify(UUID, HMACKey, SymKey)
+	if err != nil {
+		return FileUUID, FileHMACKey, FileSymKey
+	}
+	var share Share
+	_ = json.Unmarshal(sharedata, &share)
+	return share.UUIDFile, share.HMACKeyFile, share.SymKeyFile
 }
 
 
@@ -360,6 +419,7 @@ func removeAppendedData(metadata [][]byte, UUID uuid.UUID) (err error) {
 // The structure definition for a user record
 type User struct {
 	Username string
+	Password string
 	SignKey userlib.DSSignKey
 	RSADecKey userlib.PKEDecKey
 	Files map[string][][]byte 
@@ -404,6 +464,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdataptr = &userdata
 
 	userdata.Username = username
+	userdata.Password = password
 	userdata.Files = make(map[string][][]byte)
 	userdata.SharedFiles = make(map[string][][]byte)
 	userdata.AppendedData = make(map[uuid.UUID][][]byte)
@@ -422,17 +483,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 		return nil, err
 	}
 
-	UUID, HMACKey, SymKey, err := getUserKeys(username, password)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := json.Marshal(userdata)
-	if err != nil {
-		return nil, err
-	}
-
-	err = add2Datastore(UUID, HMACKey, SymKey, data)
+	err = addUser2Datastore(&userdata)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +530,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 		appendedMeta := userdata.AppendedData[UUID]
 		if appendedMeta != nil {
-			err := removeAppendedData(appendedMeta, UUID)
+			err := removeAppendedData(appendedMeta)
 			if err != nil {
 				HMACKey, SymKey = genFileKeys()
 			}
@@ -487,15 +538,10 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		}
 
 		if shared {
-			sharedata, err := decAndVerify(UUID, HMACKey, SymKey)
-			if err != nil {
+			UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
+			if HMACKey == nil {
 				return
 			}
-			var share Share
-			_ = json.Unmarshal(sharedata, &share)
-			UUID = share.UUIDFile
-			HMACKey = share.HMACKeyFile
-			SymKey = share.SymKeyFile
 		} 
 
 		file, ok := userlib.DatastoreGet(UUID)
@@ -536,53 +582,57 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // Append should be efficient, you shouldn't rewrite or reencrypt the
 // existing file, but only whatever additional information and
 // metadata you need.
-// func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-// 	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
-// 	if mapEntry == nil {
-// 		return errors.New(strings.ToTitle("filename does not exist under user"))
-// 	}
+func (userdata *User) AppendFile(filename string, data []byte) (err error) {
+	mapEntry, _ := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	if mapEntry == nil {
+		return errors.New(strings.ToTitle("filename does not exist under user"))
+	}
 
-// 	UUID := bytesToUUID(mapEntry[0])
-// 	HMACKey := mapEntry[1]
-// 	SymKey := mapEntry[2]
+	entry := userdata.AppendedData[bytesToUUID(mapEntry[0])]
+	if entry == nil {
+		UUID := uuid.New()
+		HMACKey, SymKey := genFileKeys()
+		userdata.AppendedData[bytesToUUID(mapEntry[0])] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
+		appendedEntries := make(map[int][][]byte)
+		NewUUID := uuid.New()
+		NewHMACKey, NewSymKey := genFileKeys()
+		appendedEntries[0] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
+		mEntries, err := json.Marshal(appendedEntries)
+		if err != nil {
+			return err
+		}
+		err = add2Datastore(UUID, HMACKey, SymKey, mEntries)
+		if err != nil {
+			return err
+		}
 
-// 	file, ok := userlib.DatastoreGet(UUID)
-// 	if !ok {
-// 		return errors.New(strings.ToTitle("File not found!"))
-// 	}
+		err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
-// 	EncData, err := verify(file, HMACKey)
-// 	if err != nil {
-// 		return err
-// 	}
+	UUID := bytesToUUID(entry[0])
+	HMACKey := entry[1]
+	SymKey := entry[2]
+	entries, err := decAndVerify(UUID, HMACKey, SymKey)
+	if err != nil {
+		return err
+	}
+	var appendedEntries map[int][][]byte
+	err = json.Unmarshal(entries, &appendedEntries)
+	if err != nil {
+		return err
+	}
 
-// 	var filedata [][]byte
-// 	err = json.Unmarshal(EncData, &filedata)
-// 	if err != nil {
-// 		return err
-// 	}
+	NewUUID := uuid.New()
+	NewHMACKey, NewSymKey := genFileKeys()
+	appendedEntries[len(entries) - 1] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
 
-// 	appendedData := appendData(data, filedata[0], SymKey)
-// 	DataFile := [][]byte{appendedData, filedata[1]}
-// 	mDataFile, err := json.Marshal(DataFile)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	mac, err := userlib.HMACEval(HMACKey, mDataFile)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	Package := [][]byte{mDataFile, mac}
-// 	mPackage, err := json.Marshal(Package)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	userlib.DatastoreSet(UUID, mPackage)
-// 	return nil
-// }
+	err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
+	return err
+}
 
 // This loads a file from the Datastore.
 //
@@ -594,9 +644,18 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
-	_, filedata, err := getFile(bytesToUUID(mapEntry[0]), mapEntry[1], mapEntry[2])
+	UUID := bytesToUUID(mapEntry[0])
+	_, filedata, err := getFile(UUID, mapEntry[1], mapEntry[2])
 	if err != nil {
 		return nil, err
+	}
+
+	appendedMeta := userdata.AppendedData[UUID]
+	if appendedMeta != nil {
+		filedata, err = appendData(appendedMeta, filedata)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return filedata, nil
 }
@@ -611,63 +670,63 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 // information about what the sender calls the file.  Only the
 // recipient can access the sharing record, and only the recipient
 // should be able to know the sender.
-// func (userdata *User) ShareFile(filename string, recipient string) (
-// 	magic_string string, err error) {
-// 	mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
-// 	if mapEntry == nil {
-// 		return magic_string, errors.New(strings.ToTitle("filename does not exist under user"))
-// 	}
-
-// 	tokenEncKey, ok := userlib.KeystoreGet(recipient + "RSA")
-// 	if !ok {
-// 		return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
-// 	}
-
-// 	file, _, err := getFile(mapEntry)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	//generate Share struct 
-// 	UUID, RSADecKey, err := initShare(mapEntry, userdata.SignKey)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	//add share mapping to file
-// 	file.ShareTree[userdata.Username] = [][]byte{[]byte(recipient), uuidToBytes(UUID)}
-
-// 	//generate token 
-// 	mRSADec, err := json.Marshal(RSADecKey)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	token := [][]byte{uuidToBytes(UUID), mRSADec}
-// 	mtoken, err := json.Marshal(token)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	EncToken, err := userlib.PKEEnc(tokenEncKey, mtoken)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	signature, err := userlib.DSSign(userdata.SignKey, EncToken)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-
-// 	Package := [][]byte{EncToken, signature}
-// 	mPackage, err := json.Marshal(Package)
-// 	if err != nil {
-// 		return magic_string, err
-// 	}
-	 
-// 	magic_string = string(mPackage)
-// 	return magic_string, nil
-// }
+func (userdata *User) ShareFile(filename string, recipient string) (
+	magic_string string, err error) {
+	//mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
+	//if mapEntry == nil {
+	//	return magic_string, errors.New(strings.ToTitle("filename does not exist under user"))
+	//}
+	//
+	//tokenEncKey, ok := userlib.KeystoreGet(recipient + "RSA")
+	//if !ok {
+	//	return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
+	//}
+	//
+	//file, _, err := getFile(mapEntry)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	////generate Share struct
+	//UUID, RSADecKey, err := initShare(mapEntry, userdata.SignKey)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	////add share mapping to file
+	//file.ShareTree[userdata.Username] = [][]byte{[]byte(recipient), uuidToBytes(UUID)}
+	//
+	////generate token
+	//mRSADec, err := json.Marshal(RSADecKey)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	//token := [][]byte{uuidToBytes(UUID), mRSADec}
+	//mtoken, err := json.Marshal(token)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	//EncToken, err := userlib.PKEEnc(tokenEncKey, mtoken)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	//signature, err := userlib.DSSign(userdata.SignKey, EncToken)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	//Package := [][]byte{EncToken, signature}
+	//mPackage, err := json.Marshal(Package)
+	//if err != nil {
+	//	return magic_string, err
+	//}
+	//
+	//magic_string = string(mPackage)
+	return magic_string, nil
+}
 
 // Note recipient's filename can be different from the sender's filename.
 // The recipient should not be able to discover the sender's view on
