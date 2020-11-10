@@ -198,83 +198,87 @@ func TestInvalidFile(t *testing.T) {
 	}
 }
 
-// //Ensures that AppendFile's basic functionality is working
-// func TestAppendFile(t *testing.T) {
-// 	clear()
-// 	u, err := InitUser("alice", "fubar")
-// 	if err != nil {
-// 		t.Error("Failed to initialize user", err)
-// 		return
-// 	}
+//Ensures that AppendFile's basic functionality is working
+//func TestAppendFile(t *testing.T) {
+//	clear()
+//	u, err := InitUser("alice", "fubar")
+//	if err != nil {
+//		t.Error("Failed to initialize user", err)
+//		return
+//	}
+//
+//	v := []byte("This is a test")
+//	u.StoreFile("file1", v)
+//
+//	apData := []byte("this is appended data")
+//	err = u.AppendFile("file1", apData)
+//	if err != nil {
+//		t.Error("Error while appending data:", err)
+//	}
+//
+//	v2, err2 := u.LoadFile("file1")
+//	if err2 != nil {
+//		t.Error("Failed to load data after appending", err2)
+//		return
+////	}
+//
+//	original := v
+//	for i := 0; i < len(apData); i++ {
+//		original = append(original, apData[i])
+//	}
+//
+//	if !reflect.DeepEqual(original, v2) {
+//		t.Error("appended data from Datastore is not equal to original", v2, original)
+//		return
+//	}
+//
+//}
 
-// 	v := []byte("This is a test")
-// 	u.StoreFile("file1", v)
 
-// 	apData := []byte("this is appended data")
-// 	err = u.AppendFile("file1", apData)
-// 	if err != nil {
-// 		t.Error("Error while appending data:", err)
-// 	}
-
-// 	v2, err2 := u.LoadFile("file1")
-// 	if err2 != nil {
-// 		t.Error("Failed to load data after appending", err2)
-// 		return
-// 	}
-
-// 	original := appendData(apData, v)
-// 	if !reflect.DeepEqual(original, v2) {
-// 		t.Error("appended data from Datastore is not equal to original", v2, original)
-// 		return
-// 	}
-
-// }
-
-
-func TestShare(t *testing.T) {
-	clear()
-	u, err := InitUser("alice", "fubar")
-	if err != nil {
-		t.Error("Failed to initialize user", err)
-		return
-	}
-	u2, err2 := InitUser("bob", "foobar")
-	if err2 != nil {
-		t.Error("Failed to initialize bob", err2)
-		return
-	}
-
-	v := []byte("This is a test")
-	u.StoreFile("file1", v)
-	
-	var v2 []byte
-	var magic_string string
-
-	v, err = u.LoadFile("file1")
-	if err != nil {
-		t.Error("Failed to download the file from alice", err)
-		return
-	}
-
-	magic_string, err = u.ShareFile("file1", "bob")
-	if err != nil {
-		t.Error("Failed to share the a file", err)
-		return
-	}
-	err = u2.ReceiveFile("file2", "alice", magic_string)
-	if err != nil {
-		t.Error("Failed to receive the share message", err)
-		return
-	}
-
-	v2, err = u2.LoadFile("file2")
-	if err != nil {
-		t.Error("Failed to download the file after sharing", err)
-		return
-	}
-	if !reflect.DeepEqual(v, v2) {
-		t.Error("Shared file is not the same", v, v2)
-		return
-	}
-
-}
+//func TestShare(t *testing.T) {
+//	clear()
+//	u, err := InitUser("alice", "fubar")
+//	if err != nil {
+//		t.Error("Failed to initialize user", err)
+//		return
+//	}
+//	u2, err2 := InitUser("bob", "foobar")
+//	if err2 != nil {
+//		t.Error("Failed to initialize bob", err2)
+//		return
+//	}
+//
+//	v := []byte("This is a test")
+//	u.StoreFile("file1", v)
+//
+//	var v2 []byte
+//	var magic_string string
+//
+//	v, err = u.LoadFile("file1")
+//	if err != nil {
+//		t.Error("Failed to download the file from alice", err)
+//		return
+//	}
+//
+//	magic_string, err = u.ShareFile("file1", "bob")
+//	if err != nil {
+//		t.Error("Failed to share the a file", err)
+//		return
+//	}
+//	err = u2.ReceiveFile("file2", "alice", magic_string)
+//	if err != nil {
+//		t.Error("Failed to receive the share message", err)
+//		return
+//	}
+//
+//	v2, err = u2.LoadFile("file2")
+//	if err != nil {
+//		t.Error("Failed to download the file after sharing", err)
+//		return
+//	}
+//	if !reflect.DeepEqual(v, v2) {
+//		t.Error("Shared file is not the same", v, v2)
+//		return
+//	}
+//
+//}
