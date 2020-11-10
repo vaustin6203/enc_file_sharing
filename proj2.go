@@ -363,6 +363,34 @@ func appendData(metadata [][]byte, data []byte) (appendedData []byte, err error)
 	return appendedData, nil
 }
 
+func getFileShareMap(userdata *User) (filemap map[string][][]byte, sharemap map[string][][]byte, err error) {
+	Files, err := decAndVerify(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2])
+	Shared, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = json.Unmarshal(Files, &filemap)
+	err = json.Unmarshal(Shared, &sharemap)
+	if err != nil {
+		return nil, nil, err
+	}
+	return filemap, sharemap, nil
+}
+
+func getAppendedMap(userdata *User) (appmap map[uuid.UUID][][]byte, err error) {
+	App, err := decAndVerify(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2])
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(App, &appmap)
+	if err != nil {
+		return nil, err
+	}
+	return appmap, nil
+}
+
 func getSharedFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (FileUUID uuid.UUID,
 	FileHMACKey []byte, FileSymKey []byte) {
 	sharedata, err := decAndVerify(UUID, HMACKey, SymKey)
@@ -547,15 +575,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 // The plaintext of the filename + the plaintext and length of the filename
 // should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
-	Files, err := decAndVerify(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2])
-	Shared, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
-	if err != nil {
-		return
-	}
-	var filemap map[string][][]byte
-	var sharedmap map[string][][]byte
-	err = json.Unmarshal(Files, &filemap)
-	err = json.Unmarshal(Shared, &sharedmap)
+	filemap, sharedmap, err := getFileShareMap(userdata)
 	if err != nil {
 		return
 	}
@@ -567,13 +587,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		HMACKey := mapEntry[1]
 		SymKey := mapEntry[2]
 
-		App, err := decAndVerify(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2])
-		if err != nil {
-			return
-		}
-
-		var apmap map[uuid.UUID][][]byte
-		err = json.Unmarshal(App, &apmap)
+		apmap, err := getAppendedMap(userdata)
 		if err != nil {
 			return
 		}
@@ -639,17 +653,9 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // existing file, but only whatever additional information and
 // metadata you need.
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	Files, err := decAndVerify(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2])
-	Shared, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
+	filemap, sharedmap, err := getFileShareMap(userdata)
 	if err != nil {
-		return err
-	}
-	var filemap map[string][][]byte
-	var sharedmap map[string][][]byte
-	err = json.Unmarshal(Files, &filemap)
-	err = json.Unmarshal(Shared, &sharedmap)
-	if err != nil {
-		return err
+		return
 	}
 
 	mapEntry, _ := sharedOrExists(filemap, sharedmap, filename)
@@ -657,13 +663,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		return errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
-	App, err := decAndVerify(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2])
-	if err != nil {
-		return err
-	}
-
-	var apmap map[uuid.UUID][][]byte
-	err = json.Unmarshal(App, &apmap)
+	apmap, err := getAppendedMap(userdata)
 	if err != nil {
 		return err
 	}
@@ -721,37 +721,32 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
-	Files, err := decAndVerify(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2])
-	Shared, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
+	filemap, sharedmap, err := getFileShareMap(userdata)
 	if err != nil {
-		return data, err
-	}
-	var filemap map[string][][]byte
-	var sharedmap map[string][][]byte
-	err = json.Unmarshal(Files, &filemap)
-	err = json.Unmarshal(Shared, &sharedmap)
-	if err != nil {
-		return data, err
+		return
 	}
 
-	mapEntry, _ := sharedOrExists(filemap, sharedmap, filename)
+	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
 	if mapEntry == nil {
 		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
 	UUID := bytesToUUID(mapEntry[0])
-	_, filedata, err := getFile(UUID, mapEntry[1], mapEntry[2])
+	HMACKey := mapEntry[1]
+	SymKey := mapEntry[2]
+	if shared {
+		UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
+		if HMACKey == nil {
+			return
+		}
+	}
+
+	_, filedata, err := getFile(UUID, HMACKey, SymKey)
 	if err != nil {
 		return nil, err
 	}
 
-	App, err := decAndVerify(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2])
-	if err != nil {
-		return data, err
-	}
-
-	var apmap map[uuid.UUID][][]byte
-	err = json.Unmarshal(App, &apmap)
+	apmap, err := getAppendedMap(userdata)
 	if err != nil {
 		return data, err
 	}
