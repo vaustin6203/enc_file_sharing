@@ -535,6 +535,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 				HMACKey, SymKey = genFileKeys()
 			}
 			delete(userdata.AppendedData, UUID)
+			addUser2Datastore(userdata)
 		}
 
 		if shared {
@@ -570,6 +571,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 		userdata.Files[filename] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
 		file, _ := json.Marshal(userfile)
+		addUser2Datastore(userdata)
 
 		addFile2Datastore(UUID, HMACKey, SymKey, file, data)
 	}
@@ -610,6 +612,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		if err != nil {
 			return err
 		}
+		addUser2Datastore(userdata)
 		return nil
 	}
 
