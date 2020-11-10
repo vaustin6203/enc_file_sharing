@@ -136,13 +136,13 @@ func TestStoreFile(t *testing.T) {
 		return
 	}
 
+	u1, _ := GetUser("alice", "fubar")
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
 	v1 := []byte("Overwrite data")
 	u.StoreFile("file1", v1)
 
-	u1, _ := GetUser("alice", "fubar")
 	v2, err2 := u1.LoadFile("file1")
 	if err2 != nil {
 		t.Error("Failed to upload and download", err2)
@@ -212,12 +212,12 @@ func TestAppendFile(t *testing.T) {
 	u.StoreFile("file1", v)
 
 	apData := []byte("this is appended data")
+	u1, _ := GetUser("alice", "fubar")
 	err = u.AppendFile("file1", apData)
 	if err != nil {
 		t.Error("Error while appending data:", err)
 	}
 
-	u1, _ := GetUser("alice", "fubar")
 	v2, err2 := u1.LoadFile("file1")
 	if err2 != nil {
 		t.Error("Failed to load data after appending", err2)
