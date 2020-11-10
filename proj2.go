@@ -711,8 +711,9 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 
 	NewUUID := uuid.New()
 	NewHMACKey, NewSymKey := genFileKeys()
-	appendedEntries[len(entries) - 1] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
-
+	appendedEntries[len(appendedEntries)] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
+	mentries, _ := json.Marshal(appendedEntries)
+	_ = add2Datastore(UUID, HMACKey, SymKey, mentries)
 	err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
 	return err
 }

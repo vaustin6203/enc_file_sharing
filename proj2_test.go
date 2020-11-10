@@ -211,13 +211,18 @@ func TestAppendFile(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-	apData := []byte("this is appended data")
+	apData := []byte(" this is appended data")
 	u1, _ := GetUser("alice", "fubar")
 	err = u.AppendFile("file1", apData)
 	if err != nil {
 		t.Error("Error while appending data:", err)
 	}
 
+	apData1 := []byte(" even more new data")
+	err = u.AppendFile("file1", apData1)
+	if err != nil {
+		t.Error("Error while appending data 2nd time:", err)
+	}
 	v2, err2 := u1.LoadFile("file1")
 	if err2 != nil {
 		t.Error("Failed to load data after appending", err2)
@@ -228,9 +233,12 @@ func TestAppendFile(t *testing.T) {
 	for i := 0; i < len(apData); i++ {
 		original = append(original, apData[i])
 	}
+	for i := 0; i < len(apData1); i++ {
+		original = append(original, apData1[i])
+	}
 
 	if !reflect.DeepEqual(original, v2) {
-		t.Error("appended data from Datastore is not equal to original", v2, original)
+		t.Error("appended data from Datastore is not equal to original", string(v2), string(original))
 		return
 	}
 
