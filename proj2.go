@@ -405,44 +405,44 @@ func getSharedFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (FileUUID uuid
 
 // //initializes a Share struct for the recipient and returns the UUID and RSA decryption key of
 // //the Share struct in order to generate the access token
-// func initShare(mapEntry [][]byte, SignKey userlib.DSSignKey) (UUID uuid.UUID, 
-// 	 RSADecKey userlib.PKEDecKey, err error) {
-// 	var fileShare Share 
-// 	UUID = uuid.New()
-// 	fileShare.HMACKeyFile = mapEntry[1]
-// 	fileShare.UUIDFile = bytesToUUID(mapEntry[0])
-// 	fileShare.SymKeyFile = mapEntry[2]
-// 	RSAEncKey, RSADecKey, err := userlib.PKEKeyGen()
-// 	if err != nil {
-// 		return UUID, RSADecKey, err
-// 	}
-// 	fileShare.RSAEncKey = RSAEncKey
+func initShare(mapEntry [][]byte, SignKey userlib.DSSignKey, recipient string) (UUID uuid.UUID, err error) {
+	var fileShare Share
+	UUID = uuid.New()
+	fileShare.HMACKeyFile = mapEntry[1]
+	fileShare.UUIDFile = bytesToUUID(mapEntry[0])
+	fileShare.SymKeyFile = mapEntry[2]
 
-// 	//add Share struct to Datastore
-// 	data, err := json.Marshal(fileShare)
-// 	if err != nil {
-// 		return UUID, RSADecKey, err
-// 	}
+	salt := userlib.Hash([]byte(recipient))
+	var bsalt []byte = salt[:]
+	RootKey := userlib.Argon2Key(uuidToBytes(UUID), bsalt, 16)
+	SymKey, err := userlib.HashKDF(RootKey, []byte("share sym key"))
+	if err != nil {
+		return UUID, err
+	}
 
-// 	EncData, err := userlib.PKEEnc(RSAEncKey, data)
-// 	if err != nil {
-// 		return UUID, RSADecKey, err
-// 	}
+	//add Share struct to Datastore
+	data, err := json.Marshal(fileShare)
+	if err != nil {
+		return UUID, err
+	}
+	iv := userlib.RandomBytes(userlib.AESBlockSize)
+	padData := padData(data)
+	EncData := userlib.SymEnc(SymKey[:16], iv, padData)
 
-// 	signature, err := userlib.DSSign(SignKey, EncData)
-// 	if err != nil {
-// 		return UUID, RSADecKey, err
-// 	}
+	signature, err := userlib.DSSign(SignKey, EncData)
+	if err != nil {
+		return UUID, err
+	}
 
-// 	Package := [][]byte{EncData, signature}
-// 	mPackage, err := json.Marshal(Package)
-// 	if err != nil {
-// 		return UUID, RSADecKey, err
-// 	}
+	Package := [][]byte{EncData, signature}
+	mPackage, err := json.Marshal(Package)
+	if err != nil {
+		return UUID, err
+	}
 
-// 	userlib.DatastoreSet(UUID, mPackage)
-// 	return UUID, RSADecKey, nil
-// }
+	userlib.DatastoreSet(UUID, mPackage)
+	return UUID, nil
+}
 
 // The structure definition for a user record
 type User struct {
@@ -774,59 +774,68 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 // should be able to know the sender.
 func (userdata *User) ShareFile(filename string, recipient string) (
 	magic_string string, err error) {
-	//mapEntry := sharedOrExists(userdata.Files, userdata.SharedFiles, filename)
-	//if mapEntry == nil {
-	//	return magic_string, errors.New(strings.ToTitle("filename does not exist under user"))
-	//}
-	//
-	//tokenEncKey, ok := userlib.KeystoreGet(recipient + "RSA")
-	//if !ok {
-	//	return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
-	//}
-	//
-	//file, _, err := getFile(mapEntry)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	////generate Share struct
-	//UUID, RSADecKey, err := initShare(mapEntry, userdata.SignKey)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	////add share mapping to file
-	//file.ShareTree[userdata.Username] = [][]byte{[]byte(recipient), uuidToBytes(UUID)}
-	//
-	////generate token
-	//mRSADec, err := json.Marshal(RSADecKey)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	//token := [][]byte{uuidToBytes(UUID), mRSADec}
-	//mtoken, err := json.Marshal(token)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	//EncToken, err := userlib.PKEEnc(tokenEncKey, mtoken)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	//signature, err := userlib.DSSign(userdata.SignKey, EncToken)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	//Package := [][]byte{EncToken, signature}
-	//mPackage, err := json.Marshal(Package)
-	//if err != nil {
-	//	return magic_string, err
-	//}
-	//
-	//magic_string = string(mPackage)
+	filemap, sharedmap, err := getFileShareMap(userdata)
+	if err != nil {
+		return
+	}
+
+	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
+	if mapEntry == nil {
+		return magic_string, errors.New(strings.ToTitle("filename does not exist under user"))
+	}
+
+	tokenEncKey, ok := userlib.KeystoreGet(recipient + "RSA")
+	if !ok {
+		return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
+	}
+
+	UUID := bytesToUUID(mapEntry[0])
+	HMACKey := mapEntry[1]
+	SymKey := mapEntry[2]
+	if shared {
+		UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
+		if HMACKey == nil {
+			return
+		}
+	}
+
+	file, _, err := getFile(UUID, HMACKey, SymKey)
+	if err != nil {
+		return magic_string, err
+	}
+
+	//generate Share struct
+	UUID, err = initShare(mapEntry, userdata.SignKey, recipient)
+	if err != nil {
+		return magic_string, err
+	}
+
+	//add share mapping to file
+	file.ShareTree[userdata.Username] = [][]byte{[]byte(recipient), uuidToBytes(UUID)}
+
+	//generate token
+	mtoken, err := json.Marshal(UUID)
+	if err != nil {
+		return magic_string, err
+	}
+
+	EncToken, err := userlib.PKEEnc(tokenEncKey, mtoken)
+	if err != nil {
+		return magic_string, err
+	}
+
+	signature, err := userlib.DSSign(userdata.SignKey, EncToken)
+	if err != nil {
+		return magic_string, err
+	}
+
+	Package := [][]byte{EncToken, signature}
+	mPackage, err := json.Marshal(Package)
+	if err != nil {
+		return magic_string, err
+	}
+
+	magic_string = string(mPackage)
 	return magic_string, nil
 }
 
