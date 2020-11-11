@@ -392,30 +392,42 @@ func getAppendedMap(userdata *User) (appmap map[uuid.UUID][][]byte, err error) {
 }
 
 func getSharedFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (FileUUID uuid.UUID,
-	FileHMACKey []byte, FileSymKey []byte) {
+	FileHMACKey []byte, FileSymKey []byte, err error) {
 	sharedata, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
-		return FileUUID, FileHMACKey, FileSymKey
+		return FileUUID, FileHMACKey, FileSymKey, err
 	}
 	var share Share
-	_ = json.Unmarshal(sharedata, &share)
-	return share.UUIDFile, share.HMACKeyFile, share.SymKeyFile
+	err = json.Unmarshal(sharedata, &share)
+	if err != nil {
+		return FileUUID, FileHMACKey, FileSymKey, err
+	}
+	return share.UUIDFile, share.HMACKeyFile, share.SymKeyFile, nil
+}
+
+func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, err error) {
+	salt := userlib.Hash([]byte(name))
+	var bsalt []byte = salt[:]
+	RootKey := userlib.Argon2Key(uuidToBytes(UUID), bsalt, 16)
+	HMACKey, err = userlib.HashKDF(RootKey, []byte("share hmac key"))
+	SymKey, err = userlib.HashKDF(RootKey, []byte("share sym key"))
+	if err != nil {
+		return nil, nil, err
+	}
+	return HMACKey[:16], SymKey[:16], nil
 }
 
 
 // //initializes a Share struct for the recipient and returns the UUID and RSA decryption key of
 // //the Share struct in order to generate the access token
-func initShare(mapEntry [][]byte, SignKey userlib.DSSignKey, recipient string) (UUID uuid.UUID, err error) {
+func initShare(mapEntry [][]byte, recipient string) (UUID uuid.UUID, err error) {
 	var fileShare Share
 	UUID = uuid.New()
 	fileShare.HMACKeyFile = mapEntry[1]
 	fileShare.UUIDFile = bytesToUUID(mapEntry[0])
 	fileShare.SymKeyFile = mapEntry[2]
 
-	salt := userlib.Hash([]byte(recipient))
-	var bsalt []byte = salt[:]
-	RootKey := userlib.Argon2Key(uuidToBytes(UUID), bsalt, 16)
-	SymKey, err := userlib.HashKDF(RootKey, []byte("share sym key"))
+	HMACKey, SymKey, err := getShareKeys(UUID, recipient)
 	if err != nil {
 		return UUID, err
 	}
@@ -425,22 +437,11 @@ func initShare(mapEntry [][]byte, SignKey userlib.DSSignKey, recipient string) (
 	if err != nil {
 		return UUID, err
 	}
-	iv := userlib.RandomBytes(userlib.AESBlockSize)
-	padData := padData(data)
-	EncData := userlib.SymEnc(SymKey[:16], iv, padData)
 
-	signature, err := userlib.DSSign(SignKey, EncData)
+	err = add2Datastore(UUID, HMACKey, SymKey, data)
 	if err != nil {
 		return UUID, err
 	}
-
-	Package := [][]byte{EncData, signature}
-	mPackage, err := json.Marshal(Package)
-	if err != nil {
-		return UUID, err
-	}
-
-	userlib.DatastoreSet(UUID, mPackage)
 	return UUID, nil
 }
 
@@ -607,8 +608,8 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		}
 
 		if shared {
-			UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
-			if HMACKey == nil {
+			UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
+			if err != nil {
 				return
 			}
 		} 
@@ -736,9 +737,9 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	HMACKey := mapEntry[1]
 	SymKey := mapEntry[2]
 	if shared {
-		UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
-		if HMACKey == nil {
-			return
+		UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -793,8 +794,8 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	HMACKey := mapEntry[1]
 	SymKey := mapEntry[2]
 	if shared {
-		UUID, HMACKey, SymKey = getSharedFile(UUID, HMACKey, SymKey)
-		if HMACKey == nil {
+		UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
+		if err != nil {
 			return
 		}
 	}
@@ -805,7 +806,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	}
 
 	//generate Share struct
-	UUID, err = initShare(mapEntry, userdata.SignKey, recipient)
+	UUID, err = initShare(mapEntry, recipient)
 	if err != nil {
 		return magic_string, err
 	}
@@ -835,8 +836,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 		return magic_string, err
 	}
 
-	magic_string = string(mPackage)
-	return magic_string, nil
+	return string(mPackage), nil
 }
 
 // Note recipient's filename can be different from the sender's filename.
@@ -845,7 +845,45 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 // it is authentically from the sender.
 func (userdata *User) ReceiveFile(filename string, sender string,
 	magic_string string) error {
-	return nil
+	//extract Share UUID from token
+	VerifyKey, ok := userlib.KeystoreGet(sender)
+	if !ok {
+		return errors.New("sender verification key not found")
+	}
+
+	var mtoken [][]byte
+	err := json.Unmarshal([]byte(magic_string), &mtoken)
+	if err != nil {
+		return err
+	}
+
+	err = userlib.DSVerify(VerifyKey, mtoken[0], mtoken[1])
+	if err != nil {
+		return err
+	}
+
+	ShareUUID, err := userlib.PKEDec(userdata.RSADecKey, mtoken[0])
+	if err != nil {
+		return err
+	}
+
+	HMACKey, SymKey, err := getShareKeys(bytesToUUID(ShareUUID), userdata.Username)
+	if err != nil {
+		return err
+	}
+
+	metadata, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
+	var sharemap map[string][][]byte
+	err = json.Unmarshal(metadata, &sharemap)
+	if err != nil {
+		return err
+	}
+
+	sharemap[filename] = [][]byte{ShareUUID, HMACKey, SymKey}
+	msharemap, _ := json.Marshal(sharemap)
+	err = add2Datastore(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2], msharemap)
+
+	return err
 }
 
 // Removes target user's access.
