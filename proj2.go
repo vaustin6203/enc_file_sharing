@@ -307,48 +307,35 @@ func decAndVerify (UUID uuid.UUID, HMACKey []byte, SymKey []byte) (data []byte, 
 }
 
 func removeAppendedData(metadata [][]byte) (err error) {
-	UUID := bytesToUUID(metadata[0])
-	data, err := decAndVerify(UUID, metadata[1], metadata[2])
-	userlib.DatastoreDelete(UUID)
-	if err != nil {
-		return err
-	}
+	NumEntries := int(metadata[1][0])
+	RootKey := metadata[0]
 
-	var appendedEntries map[int][][]byte
-	err = json.Unmarshal(data, &appendedEntries)
-	if err != nil {
-		return err
-	}
-
-	for i := 0; i < len(appendedEntries); i++ {
-		entry := appendedEntries[i]
-		_, err = decAndVerify(bytesToUUID(entry[0]), entry[1], entry[2])
-		userlib.DatastoreDelete(UUID)
+	for i := 0; i < NumEntries; i++ {
+		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey, i)
 		if err != nil {
 			return err
 		}
+		_, err = decAndVerify(UUID, HMACKey, SymKey)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreDelete(UUID)
 	}
 
 	return nil
 }
 
 func appendData(metadata [][]byte, data []byte) (appendedData []byte, err error) {
-	UUID := bytesToUUID(metadata[0])
-	appended, err := decAndVerify(UUID, metadata[1], metadata[2])
-	if err != nil {
-		return nil, err
-	}
-
-	var appendedEntries map[int][][]byte
-	err = json.Unmarshal(appended, &appendedEntries)
-	if err != nil {
-		return nil, err
-	}
+	NumEntries := int(metadata[1][0])
+	RootKey := metadata[0]
 
 	appendedData = data
-	for i := 0; i < len(appendedEntries); i++ {
-		entry := appendedEntries[i]
-		ap, err := decAndVerify(bytesToUUID(entry[0]), entry[1], entry[2])
+	for i := 0; i < NumEntries; i++ {
+		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey, i)
+		if err != nil {
+			return nil, err
+		}
+		ap, err := decAndVerify(UUID, HMACKey, SymKey)
 		if err != nil {
 			return nil, err
 		}
@@ -384,6 +371,23 @@ func getAppendedMap(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (appmap map[u
 		return nil, err
 	}
 	return appmap, nil
+}
+
+func getAppendKeys(RootKey []byte, NumAppends int) (UUID uuid.UUID, HMACKey []byte, SymKey []byte, err error) {
+	bNumAppends := byte(NumAppends)
+	RootKeyap := append(RootKey, bNumAppends)[1:17]
+	uuidInput := userlib.Hash(RootKeyap)
+	UUID, err = uuid.FromBytes(uuidInput[:16])
+	if err != nil {
+		return UUID, HMACKey, SymKey, err
+	}
+
+	HMACKey, err = userlib.HashKDF(RootKeyap, []byte("hmac key for appended data"))
+	SymKey, err = userlib.HashKDF(RootKeyap, []byte("sym key for appended data"))
+	if err != nil {
+		return UUID, HMACKey, SymKey, err
+	}
+	return UUID, HMACKey[:16], SymKey[:16], nil
 }
 
 func getShared(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (share Share, err error) {
@@ -653,12 +657,12 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		}
 
 		appendedMeta := apmap[UUID]
-		if appendedMeta != nil {
+		if int(appendedMeta[1][0]) != 0 {
 			err := removeAppendedData(appendedMeta)
 			if err != nil {
 				HMACKey, SymKey = genFileKeys()
 			}
-			delete(apmap, UUID)
+			appendedMeta[1] = []byte{0}
 			apdata, _ := json.Marshal(apmap)
 			err = add2Datastore(ApUUID, ApHMAC, ApSym, apdata)
 			if err != nil {
@@ -695,6 +699,19 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		mfilemap, _ := json.Marshal(Map)
 		_ = add2Datastore(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2], mfilemap)
 		addFile2Datastore(UUID, HMACKey, SymKey, file, data)
+
+		//Add entry in AppendMap for new file
+		RootKey := userlib.RandomBytes(16)
+		AppUUID := bytesToUUID(userdata.AppendedData[0])
+		ApHmac := userdata.AppendedData[1]
+		ApSym := userdata.AppendedData[2]
+		apmap, err := getAppendedMap(AppUUID, ApHmac, ApSym)
+		if err != nil {
+			return
+		}
+		apmap[UUID] = [][]byte{RootKey, []byte{0}}
+		m_apmap, _ := json.Marshal(apmap)
+		_ = add2Datastore(AppUUID, ApHmac, ApSym, m_apmap)
 	}
 
 	return
@@ -740,52 +757,21 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	}
 
 	entry := apmap[UUID]
-	if entry == nil {
-		MapUUID := uuid.New()
-		MapHMACKey, MapSymKey := genFileKeys()
-
-		apmap[UUID] = [][]byte{uuidToBytes(MapUUID), MapHMACKey, MapSymKey}
-		appendedEntries := make(map[int][][]byte)
-		NewUUID := uuid.New()
-		NewHMACKey, NewSymKey := genFileKeys()
-		appendedEntries[0] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
-		mEntries, err := json.Marshal(appendedEntries)
-		if err != nil {
-			return err
-		}
-		err = add2Datastore(MapUUID, MapHMACKey, MapSymKey, mEntries)
-		if err != nil {
-			return err
-		}
-
-		err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
-		if err != nil {
-			return err
-		}
-
-		m_apmap, _ := json.Marshal(apmap)
-		_ = add2Datastore(ApUUID, ApHMAC, ApSym, m_apmap)
-		return nil
-	}
-
-	UUIDmap := bytesToUUID(entry[0])
-	HMACKeymap := entry[1]
-	SymKeymap := entry[2]
-	entries, err := decAndVerify(UUIDmap, HMACKeymap, SymKeymap)
-	if err != nil {
-		return err
-	}
-	var appendedEntries map[int][][]byte
-	err = json.Unmarshal(entries, &appendedEntries)
+	RootKey := entry[0]
+	NumAppends := int(entry[1][0])
+	NewUUID, NewHMACKey, NewSymKey, err := getAppendKeys(RootKey, NumAppends)
 	if err != nil {
 		return err
 	}
 
-	NewUUID := uuid.New()
-	NewHMACKey, NewSymKey := genFileKeys()
-	appendedEntries[len(appendedEntries)] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
-	mentries, _ := json.Marshal(appendedEntries)
-	_ = add2Datastore(UUIDmap, HMACKeymap, SymKeymap, mentries)
+	NumAppends += 1
+	apmap[UUID] = [][]byte{RootKey, []byte{byte(NumAppends)}}
+	m_apmap, _ := json.Marshal(apmap)
+	err = add2Datastore(ApUUID, ApHMAC, ApSym, m_apmap)
+	if err != nil {
+		return err
+	}
+
 	err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
 	return err
 }
