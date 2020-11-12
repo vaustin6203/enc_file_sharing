@@ -378,8 +378,8 @@ func getFileShareMap(userdata *User) (filemap map[string][][]byte, sharemap map[
 	return filemap, sharemap, nil
 }
 
-func getAppendedMap(userdata *User) (appmap map[uuid.UUID][][]byte, err error) {
-	App, err := decAndVerify(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2])
+func getAppendedMap(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (appmap map[uuid.UUID][][]byte, err error) {
+	App, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
 		return nil, err
 	}
@@ -391,18 +391,17 @@ func getAppendedMap(userdata *User) (appmap map[uuid.UUID][][]byte, err error) {
 	return appmap, nil
 }
 
-func getSharedFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (FileUUID uuid.UUID,
-	FileHMACKey []byte, FileSymKey []byte, err error) {
+func getShared(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (share Share, err error) {
 	sharedata, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
-		return FileUUID, FileHMACKey, FileSymKey, err
+		return share, err
 	}
-	var share Share
+
 	err = json.Unmarshal(sharedata, &share)
 	if err != nil {
-		return FileUUID, FileHMACKey, FileSymKey, err
+		return share, err
 	}
-	return share.UUIDFile, share.HMACKeyFile, share.SymKeyFile, nil
+	return share, nil
 }
 
 func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, err error) {
@@ -420,12 +419,13 @@ func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, e
 
 // //initializes a Share struct for the recipient and returns the UUID and RSA decryption key of
 // //the Share struct in order to generate the access token
-func initShare(mapEntry [][]byte, recipient string) (UUID uuid.UUID, err error) {
+func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid.UUID, err error) {
 	var fileShare Share
 	UUID = uuid.New()
 	fileShare.HMACKeyFile = mapEntry[1]
 	fileShare.UUIDFile = bytesToUUID(mapEntry[0])
 	fileShare.SymKeyFile = mapEntry[2]
+	fileShare.AppendedData = ApEntry
 
 	HMACKey, SymKey, err := getShareKeys(UUID, recipient)
 	if err != nil {
@@ -467,6 +467,7 @@ type Share struct {
 	UUIDFile uuid.UUID
 	SymKeyFile []byte
 	HMACKeyFile []byte
+	AppendedData [][]byte
 }
 
 // This creates a user.  It will only be called once for a user
@@ -583,12 +584,29 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
 	if mapEntry != nil {
-
 		UUID := bytesToUUID(mapEntry[0])
 		HMACKey := mapEntry[1]
 		SymKey := mapEntry[2]
 
-		apmap, err := getAppendedMap(userdata)
+		ApUUID := bytesToUUID(userdata.AppendedData[0])
+		ApHMAC := userdata.AppendedData[1]
+		ApSym := userdata.AppendedData[2]
+
+		if shared {
+			share, err := getShared(UUID, HMACKey, SymKey)
+			if err != nil {
+				return
+			}
+			ApUUID = bytesToUUID(share.AppendedData[0])
+			ApHMAC = share.AppendedData[1]
+			ApSym = share.AppendedData[2]
+
+			UUID = share.UUIDFile
+			HMACKey = share.HMACKeyFile
+			SymKey = share.SymKeyFile
+		}
+
+		apmap, err := getAppendedMap(ApUUID, ApHMAC, ApSym)
 		if err != nil {
 			return
 		}
@@ -601,18 +619,11 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 			}
 			delete(apmap, UUID)
 			apdata, _ := json.Marshal(apmap)
-			err = add2Datastore(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2], apdata)
+			err = add2Datastore(ApUUID, ApHMAC, ApSym, apdata)
 			if err != nil {
 				return
 			}
 		}
-
-		if shared {
-			UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
-			if err != nil {
-				return
-			}
-		} 
 
 		file, ok := userlib.DatastoreGet(UUID)
 		if !ok {
@@ -659,21 +670,44 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		return
 	}
 
-	mapEntry, _ := sharedOrExists(filemap, sharedmap, filename)
+	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
 	if mapEntry == nil {
 		return errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
-	apmap, err := getAppendedMap(userdata)
+	UUID := bytesToUUID(mapEntry[0])
+
+	ApUUID := bytesToUUID(userdata.AppendedData[0])
+	ApHMAC := userdata.AppendedData[1]
+	ApSym := userdata.AppendedData[2]
+
+	if shared {
+		HMACKey := mapEntry[1]
+		SymKey := mapEntry[2]
+		share, err := getShared(UUID, HMACKey, SymKey)
+		if err != nil {
+			return err
+		}
+		ApUUID = bytesToUUID(share.AppendedData[0])
+		ApHMAC = share.AppendedData[1]
+		ApSym = share.AppendedData[2]
+
+		UUID = share.UUIDFile
+		HMACKey = share.HMACKeyFile
+		SymKey = share.SymKeyFile
+	}
+
+	apmap, err := getAppendedMap(ApUUID, ApHMAC, ApSym)
 	if err != nil {
 		return err
 	}
 
-	entry := apmap[bytesToUUID(mapEntry[0])]
+	entry := apmap[UUID]
 	if entry == nil {
-		UUID := uuid.New()
-		HMACKey, SymKey := genFileKeys()
-		apmap[bytesToUUID(mapEntry[0])] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
+		MapUUID := uuid.New()
+		MapHMACKey, MapSymKey := genFileKeys()
+
+		apmap[UUID] = [][]byte{uuidToBytes(MapUUID), MapHMACKey, MapSymKey}
 		appendedEntries := make(map[int][][]byte)
 		NewUUID := uuid.New()
 		NewHMACKey, NewSymKey := genFileKeys()
@@ -682,7 +716,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		if err != nil {
 			return err
 		}
-		err = add2Datastore(UUID, HMACKey, SymKey, mEntries)
+		err = add2Datastore(MapUUID, MapHMACKey, MapSymKey, mEntries)
 		if err != nil {
 			return err
 		}
@@ -693,14 +727,14 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		}
 
 		m_apmap, _ := json.Marshal(apmap)
-		_ = add2Datastore(bytesToUUID(userdata.AppendedData[0]), userdata.AppendedData[1], userdata.AppendedData[2], m_apmap)
+		_ = add2Datastore(ApUUID, ApHMAC, ApSym, m_apmap)
 		return nil
 	}
 
-	UUID := bytesToUUID(entry[0])
-	HMACKey := entry[1]
-	SymKey := entry[2]
-	entries, err := decAndVerify(UUID, HMACKey, SymKey)
+	UUIDmap := bytesToUUID(entry[0])
+	HMACKeymap := entry[1]
+	SymKeymap := entry[2]
+	entries, err := decAndVerify(UUIDmap, HMACKeymap, SymKeymap)
 	if err != nil {
 		return err
 	}
@@ -714,7 +748,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	NewHMACKey, NewSymKey := genFileKeys()
 	appendedEntries[len(appendedEntries)] = [][]byte{uuidToBytes(NewUUID), NewHMACKey, NewSymKey}
 	mentries, _ := json.Marshal(appendedEntries)
-	_ = add2Datastore(UUID, HMACKey, SymKey, mentries)
+	_ = add2Datastore(UUIDmap, HMACKeymap, SymKeymap, mentries)
 	err = add2Datastore(NewUUID, NewHMACKey, NewSymKey, data)
 	return err
 }
@@ -733,22 +767,34 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
 
-	UUID := bytesToUUID(mapEntry[0])
-	HMACKey := mapEntry[1]
-	SymKey := mapEntry[2]
-	if shared {
-		UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
-		if err != nil {
-			return nil, err
+		UUID := bytesToUUID(mapEntry[0])
+		HMACKey := mapEntry[1]
+		SymKey := mapEntry[2]
+
+		ApUUID := bytesToUUID(userdata.AppendedData[0])
+		ApHMAC := userdata.AppendedData[1]
+		ApSym := userdata.AppendedData[2]
+
+		if shared {
+			share, err := getShared(UUID, HMACKey, SymKey)
+			if err != nil {
+				return nil, err
+			}
+			ApUUID = bytesToUUID(share.AppendedData[0])
+			ApHMAC = share.AppendedData[1]
+			ApSym = share.AppendedData[2]
+
+			UUID = share.UUIDFile
+			HMACKey = share.HMACKeyFile
+			SymKey = share.SymKeyFile
 		}
-	}
 
 	_, filedata, err := getFile(UUID, HMACKey, SymKey)
 	if err != nil {
 		return nil, err
 	}
 
-	apmap, err := getAppendedMap(userdata)
+	apmap, err := getAppendedMap(ApUUID, ApHMAC, ApSym)
 	if err != nil {
 		return data, err
 	}
@@ -790,14 +836,21 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 		return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
 	}
 
-	UUID := bytesToUUID(mapEntry[0])
-	HMACKey := mapEntry[1]
-	SymKey := mapEntry[2]
+		UUID := bytesToUUID(mapEntry[0])
+		HMACKey := mapEntry[1]
+		SymKey := mapEntry[2]
+		AppendedData := userdata.AppendedData
+
 	if shared {
-		UUID, HMACKey, SymKey, err = getSharedFile(UUID, HMACKey, SymKey)
+		share, err := getShared(UUID, HMACKey, SymKey)
 		if err != nil {
-			return
+			return magic_string, err
 		}
+
+		UUID = share.UUIDFile
+		HMACKey = share.HMACKeyFile
+		SymKey = share.SymKeyFile
+		AppendedData = share.AppendedData
 	}
 
 	file, _, err := getFile(UUID, HMACKey, SymKey)
@@ -806,7 +859,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	}
 
 	//generate Share struct
-	UUID, err = initShare(mapEntry, recipient)
+	UUID, err = initShare(mapEntry, AppendedData, recipient)
 	if err != nil {
 		return magic_string, err
 	}

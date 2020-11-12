@@ -292,3 +292,57 @@ func TestShare(t *testing.T) {
 	}
 
 }
+
+func TestShareAppend(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	var v2 []byte
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message", err)
+		return
+	}
+
+	apData1 := []byte(" this is appended data")
+	err = u.AppendFile("file1", apData1)
+	if err != nil {
+		t.Error("Error while appending data", err)
+	}
+
+	v2, err = u2.LoadFile("file2")
+	if err != nil {
+		t.Error("Failed to download the file after appending", err)
+		return
+	}
+
+	original := v
+	for i := 0; i < len(apData1); i++ {
+		original = append(original, apData1[i])
+	}
+
+	if !reflect.DeepEqual(original, v2) {
+		t.Error("appended data from Datastore is not equal to original", string(v2), string(original))
+		return
+	}
+
+}
