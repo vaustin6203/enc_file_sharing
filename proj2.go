@@ -282,14 +282,11 @@ func verify(data []byte, HMACKey []byte) (verfied_data []byte, err error) {
 //Helper function: determines if a filename already exists for a user
 //return map entry under filename if exists and nil otherwise 
 //if it is a shared file, also returns true
-func sharedOrExists(filemap map[string][][]byte, shared_filemap map[string][][]byte, 
-	filename string) (entry [][]byte, shared bool) {
-	if val, exists := filemap[filename]; exists {
-		return val, false
-	} else if val, exists = shared_filemap[filename]; exists {
-		return val, true
+func Exists(Map map[string][][]byte, filename string) (entry [][]byte) {
+	if val, exists := Map[filename]; exists {
+		return val
 	}
-	return nil, false
+	return nil
 }
 
 func decAndVerify (UUID uuid.UUID, HMACKey []byte, SymKey []byte) (data []byte, err error) {
@@ -363,19 +360,17 @@ func appendData(metadata [][]byte, data []byte) (appendedData []byte, err error)
 	return appendedData, nil
 }
 
-func getFileShareMap(userdata *User) (filemap map[string][][]byte, sharemap map[string][][]byte, err error) {
-	Files, err := decAndVerify(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2])
-	Shared, err := decAndVerify(bytesToUUID(userdata.SharedFiles[0]), userdata.SharedFiles[1], userdata.SharedFiles[2])
+func getMap(arr [][]byte) (dsmap map[string][][]byte, err error) {
+	Map, err := decAndVerify(bytesToUUID(arr[0]), arr[1], arr[2])
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	err = json.Unmarshal(Files, &filemap)
-	err = json.Unmarshal(Shared, &sharemap)
+	err = json.Unmarshal(Map, &dsmap)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return filemap, sharemap, nil
+	return dsmap, nil
 }
 
 func getAppendedMap(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (appmap map[uuid.UUID][][]byte, err error) {
@@ -402,6 +397,25 @@ func getShared(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (share Share, err 
 		return share, err
 	}
 	return share, nil
+}
+
+func sharedOrExists(userdata *User, filename string) (mapEntry [][]byte, Map map[string][][]byte, shared bool, err error) {
+	Map, err = getMap(userdata.Files)
+	if err != nil {
+		return nil, Map,false, err
+	}
+
+	mapEntry = Exists(Map, filename)
+	shared = false
+	if mapEntry == nil {
+		Map, err = getMap(userdata.SharedFiles)
+		if err != nil {
+			return nil, Map, false, err
+		}
+		mapEntry = Exists(Map, filename)
+		shared = true
+	}
+	return mapEntry, Map, shared, nil
 }
 
 func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, err error) {
@@ -443,6 +457,34 @@ func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid
 		return UUID, err
 	}
 	return UUID, nil
+}
+
+func isChild(ShareTree map[string][][]byte, username string, target string) (UUID uuid.UUID, err error) {
+	entry := ShareTree[target]
+	if entry == nil{
+		return UUID, errors.New("User has not shared file")
+	}
+	entry_name := string(entry[0])
+	if entry_name != username {
+		return UUID, errors.New("User has not shared file with target")
+	}
+	return bytesToUUID(entry[1]), nil
+}
+
+func DeleteChildren(ShareTree map[string][][]byte, target string) (tree map[string][][]byte){
+	loopTree := ShareTree
+	i := 0
+	for child, parent := range loopTree {
+		sharer := string(parent[0])
+		if sharer == target {
+			UUID := bytesToUUID(parent[1])
+			userlib.DatastoreDelete(UUID)
+			delete(ShareTree, child)
+			ShareTree = DeleteChildren(ShareTree, child)
+			i++
+		}
+	}
+	return ShareTree
 }
 
 // The structure definition for a user record
@@ -577,12 +619,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 // The plaintext of the filename + the plaintext and length of the filename
 // should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
-	filemap, sharedmap, err := getFileShareMap(userdata)
+	mapEntry, Map, shared, err := sharedOrExists(userdata, filename)
 	if err != nil {
 		return
 	}
 
-	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
 	if mapEntry != nil {
 		UUID := bytesToUUID(mapEntry[0])
 		HMACKey := mapEntry[1]
@@ -649,9 +690,9 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		UUID := uuid.New()
 		HMACKey, SymKey := genFileKeys()
 
-		filemap[filename] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
+		Map[filename] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
 		file, _ := json.Marshal(userfile)
-		mfilemap, _ := json.Marshal(filemap)
+		mfilemap, _ := json.Marshal(Map)
 		_ = add2Datastore(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2], mfilemap)
 		addFile2Datastore(UUID, HMACKey, SymKey, file, data)
 	}
@@ -665,16 +706,12 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // existing file, but only whatever additional information and
 // metadata you need.
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	filemap, sharedmap, err := getFileShareMap(userdata)
+	mapEntry, _, shared, err := sharedOrExists(userdata, filename)
 	if err != nil {
 		return
-	}
-
-	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
-	if mapEntry == nil {
+	} else if mapEntry == nil {
 		return errors.New(strings.ToTitle("filename does not exist under user"))
 	}
-
 	UUID := bytesToUUID(mapEntry[0])
 
 	ApUUID := bytesToUUID(userdata.AppendedData[0])
@@ -757,16 +794,12 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
-	filemap, sharedmap, err := getFileShareMap(userdata)
+	mapEntry, _, shared, err := sharedOrExists(userdata, filename)
 	if err != nil {
 		return
-	}
-
-	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
-	if mapEntry == nil {
+	} else if mapEntry == nil {
 		return nil, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
-
 		UUID := bytesToUUID(mapEntry[0])
 		HMACKey := mapEntry[1]
 		SymKey := mapEntry[2]
@@ -821,16 +854,12 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 // should be able to know the sender.
 func (userdata *User) ShareFile(filename string, recipient string) (
 	magic_string string, err error) {
-	filemap, sharedmap, err := getFileShareMap(userdata)
+	mapEntry, _, shared, err := sharedOrExists(userdata, filename)
 	if err != nil {
 		return
-	}
-
-	mapEntry, shared := sharedOrExists(filemap, sharedmap, filename)
-	if mapEntry == nil {
+	} else if mapEntry == nil {
 		return magic_string, errors.New(strings.ToTitle("filename does not exist under user"))
 	}
-
 	tokenEncKey, ok := userlib.KeystoreGet(recipient + "RSA")
 	if !ok {
 		return magic_string, errors.New(strings.Title("recipient's username doesn't exist"))
@@ -853,22 +882,30 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 		AppendedData = share.AppendedData
 	}
 
-	file, _, err := getFile(UUID, HMACKey, SymKey)
+	file, filedata, err := getFile(UUID, HMACKey, SymKey)
 	if err != nil {
 		return magic_string, err
 	}
 
 	//generate Share struct
-	UUID, err = initShare(mapEntry, AppendedData, recipient)
+	ShareUUID, err := initShare(mapEntry, AppendedData, recipient)
 	if err != nil {
 		return magic_string, err
 	}
 
 	//add share mapping to file
-	file.ShareTree[userdata.Username] = [][]byte{[]byte(recipient), uuidToBytes(UUID)}
+	if file.ShareTree[recipient] != nil {
+		return magic_string, errors.New("file has already been shared with recipient")
+	}
+	file.ShareTree[recipient] = [][]byte{[]byte(userdata.Username), uuidToBytes(ShareUUID)}
+	mfile, err := json.Marshal(file)
+	if err != nil {
+		return magic_string, err
+	}
+	addFile2Datastore(UUID, HMACKey, SymKey, mfile, filedata)
 
 	//generate token
-	mtoken, err := json.Marshal(UUID)
+	mtoken, err := json.Marshal(ShareUUID)
 	if err != nil {
 		return magic_string, err
 	}
@@ -941,5 +978,43 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 
 // Removes target user's access.
 func (userdata *User) RevokeFile(filename string, target_username string) (err error) {
-	return
+	mapEntry, _, shared, err := sharedOrExists(userdata, filename)
+	if err != nil {
+		return
+	} else if mapEntry == nil {
+		return errors.New(strings.ToTitle("filename does not exist under user"))
+	}
+	UUID := bytesToUUID(mapEntry[0])
+	HMACKey := mapEntry[1]
+	SymKey := mapEntry[2]
+
+	if shared {
+		share, err := getShared(UUID, HMACKey, SymKey)
+		if err != nil {
+			return  err
+		}
+		UUID = share.UUIDFile
+		HMACKey = share.HMACKeyFile
+		SymKey = share.SymKeyFile
+	}
+
+	file, filedata, err := getFile(UUID, HMACKey, SymKey)
+	if err != nil {
+		return err
+	}
+
+	ShareUUID, err := isChild(file.ShareTree, userdata.Username, target_username)
+	if err != nil {
+		return err
+	}
+	delete(file.ShareTree, userdata.Username)
+	userlib.DatastoreDelete(ShareUUID)
+	file.ShareTree = DeleteChildren(file.ShareTree, target_username)
+
+	mFile, err := json.Marshal(file)
+	if err != nil {
+		return err
+	}
+	addFile2Datastore(UUID, HMACKey, SymKey, mFile, filedata)
+	return nil
 }

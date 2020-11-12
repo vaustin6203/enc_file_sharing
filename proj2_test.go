@@ -346,3 +346,62 @@ func TestShareAppend(t *testing.T) {
 	}
 
 }
+
+func TestRevoke(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	u3, err := InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+
+	magic_string, err = u2.ShareFile("file2", "jane")
+	if err != nil {
+		t.Error("Failed to share the file2", err)
+		return
+	}
+
+	err = u3.ReceiveFile("file3", "bob", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for jane", err)
+		return
+	}
+
+	err = u.RevokeFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to revoke file", err)
+		return
+	}
+
+	_, err = u3.LoadFile("file3")
+	if err == nil {
+		t.Error("Revoked child was able to load file")
+		return
+	}
+	t.Log("Received error:", err)
+}
