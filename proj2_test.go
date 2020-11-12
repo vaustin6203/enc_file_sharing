@@ -66,6 +66,32 @@ func TestUserExists(t *testing.T) {
 	t.Log("Got error", err1)
 }
 
+func TestUserGet_BadInput(t *testing.T) {
+	clear()
+	t.Log("Initialization test")
+
+	// You can set this to false!
+	userlib.SetDebugStatus(true)
+
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		// t.Error says the test fails
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	_, err = GetUser("alice", "fubar2020")
+	if err != nil {
+		t.Log("Got error with wrong password", err)
+		return
+	}
+
+	_, err = GetUser("alice_", "fubar")
+	if err != nil {
+		t.Log("Got error with wrong username", err)
+		return
+	}
+}
+
 //Tests if able to properly retreive a user from Datastore
 //and if able to create more than one instance of same user 
 func TestUserGet(t *testing.T) {
@@ -104,6 +130,7 @@ func TestUserGet(t *testing.T) {
 
 }
 
+//basic Store/Load file functionality
 func TestStorage(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -153,8 +180,36 @@ func TestStoreFile(t *testing.T) {
 		t.Error("Downloaded file is not the same", v1, v2)
 		return
 	}
+}
 
-} 
+//Tests if another instance of a user makes a new file,
+//the original user has access to the file
+func Test_StoreFiles(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u1, _ := GetUser("alice", "fubar")
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	v1 := []byte("new data for new file")
+	u1.StoreFile("file2", v1)
+
+	v2, err2 := u.LoadFile("file2")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+
+	if !reflect.DeepEqual(v1, v2) {
+		t.Error("Downloaded file is not the same", v1, v2)
+		return
+	}
+}
 
 //Tests to make sure LoadFile does not load data that should 
 //only be accessed by one user 
@@ -180,7 +235,6 @@ func TestLoadFile(t *testing.T) {
 		t.Error("Failed to recognize filename should not exist under user", err2)
 		return
 	}
-
 	t.Log("Got error", err2)
 }
 
@@ -213,7 +267,7 @@ func TestAppendFile(t *testing.T) {
 
 	apData := []byte(" this is appended data")
 	u1, _ := GetUser("alice", "fubar")
-	err = u.AppendFile("file1", apData)
+	err = u1.AppendFile("file1", apData)
 	if err != nil {
 		t.Error("Error while appending data:", err)
 	}
@@ -242,9 +296,62 @@ func TestAppendFile(t *testing.T) {
 		return
 	}
 
+	v3, err2 := u.LoadFile("file1")
+	if err2 != nil {
+		t.Error("Failed to load data after appending", err2)
+		return
+	}
+
+	if !reflect.DeepEqual(v3, v2) {
+		t.Error("appended data from Datastore is not equal to original", string(v2), string(v3))
+		return
+	}
 }
 
+//Makes sure user without access to a file can't append to it
+func TestInvalidAppend(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
 
+	apData1 := []byte("new data")
+	err = u2.AppendFile("file1", apData1)
+	if err == nil {
+		t.Error("Unauthorized user was able to append to file", err)
+	}
+	t.Log("got error", err)
+	return
+}
+
+//Makes sure user can't append to a file that doesn't exist
+func TestAppend_WrongInput(t *testing.T) {
+	clear()
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+
+	apData1 := []byte("new data")
+	err = u2.AppendFile("file5", apData1)
+	if err == nil {
+		t.Error("attempted to append to a file that doesn't exist", err)
+	}
+	t.Log("got error", err)
+	return
+}
+
+//Tests basic share functionality
 func TestShare(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -293,6 +400,8 @@ func TestShare(t *testing.T) {
 
 }
 
+//Tests that user with shared file is able to load appended data
+//that was done by another user
 func TestShareAppend(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -347,6 +456,80 @@ func TestShareAppend(t *testing.T) {
 
 }
 
+//tests that sequential store and appends to a file
+//are reflected across all users with access
+func TestShareModify(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message", err)
+		return
+	}
+
+	apData1 := []byte(" this is appended data")
+	err = u.AppendFile("file1", apData1)
+	if err != nil {
+		t.Error("Error while appending data", err)
+	}
+
+	apData2 := []byte(" this is more appended data")
+	err = u2.AppendFile("file2", apData2)
+	if err != nil {
+		t.Error("Error while appending data", err)
+	}
+
+	v_loaded, err := u.LoadFile("file1")
+	if err != nil {
+		t.Error("Failed to load file", err)
+		return
+	}
+	v2_loaded, err := u2.LoadFile("file2")
+	if err != nil {
+		t.Error("Failed to load file", err)
+		return
+	}
+
+	if !reflect.DeepEqual(v2_loaded, v_loaded) {
+		t.Error("appended data from Datastore is not equal to original", string(v_loaded), string(v2_loaded))
+		return
+	}
+
+	v2 := []byte("This should overwrite file")
+	u2.StoreFile("file2", v2)
+	v3_loaded, err := u.LoadFile("file1")
+	if err != nil {
+		t.Error("Failed to load file", err)
+		return
+	}
+
+	if !reflect.DeepEqual(v3_loaded, v2) {
+		t.Error("stored data from Datastore is not equal to original", string(v2), string(v3_loaded))
+		return
+	}
+}
+
+//Tests that Revoke successfully revokes access to target
+//and all of its children
 func TestRevoke(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
