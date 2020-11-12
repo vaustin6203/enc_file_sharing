@@ -860,7 +860,7 @@ func TestRevokeDirectChild(t *testing.T) {
 	t.Log("got error", err)
 }
 
-//Tests if user who doesn't have access is able to revoke file from user
+//Tests if user who doesn't have access is not able to revoke file from user
 func TestInvalidRevoke(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -899,6 +899,11 @@ func TestInvalidRevoke(t *testing.T) {
 		return
 	}
 	t.Log("got error", err)
+	err = u.RevokeFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to revoke file from bob", err)
+		return
+	}
 }
 
 //Test if try to revoke file that doesn't exist
