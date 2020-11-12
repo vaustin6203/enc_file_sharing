@@ -528,6 +528,96 @@ func TestShareModify(t *testing.T) {
 	}
 }
 
+//tests that a modified access token is able to be detected
+func TestValidToken(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+	magic_string += "I'm evil"
+
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err == nil {
+		t.Error("Failed to recognize token was not valid")
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Tests that a user can not steal token and gain access to file
+func TestInterceptShare(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	_, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+	u3, err := InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+
+	err = u3.ReceiveFile("file2", "alice", magic_string)
+	if err == nil {
+		t.Error("Failed to recognize that user stole token", err)
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Test that makes sure don't try to share with user that doesnt exist
+func TestShareExist(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	_, err = u.ShareFile("file1", "bob")
+	if err == nil {
+		t.Error("Attempted to share file with user that doesn't exist")
+		return
+	}
+	t.Log("got error", err)
+}
+
 //Tests that Revoke successfully revokes access to target
 //and all of its children
 func TestRevoke(t *testing.T) {
