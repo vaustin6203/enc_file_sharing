@@ -598,6 +598,97 @@ func TestInterceptShare(t *testing.T) {
 	t.Log("got error", err)
 }
 
+//Test's that able to confirm that token was sent from the right person
+func TestVerifySender(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+	_, err = InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+
+	err = u2.ReceiveFile("file2", "jane", magic_string)
+	if err == nil {
+		t.Error("Failed to recognize that user was not sender of token", err)
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Tests that receive file with name that already exists triggers an error
+//also ensures multiple instances of user still have access to shared file
+func TestReceive_FileName(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+	u3, err := GetUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to get user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	v2 := []byte("happy, now SAD!")
+	u2.StoreFile("file2", v2)
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err == nil {
+		t.Error("Failed to recognize file already exists under user")
+		return
+	}
+	t.Log("got error", err)
+	err = u2.ReceiveFile("file3", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive file")
+		return
+	}
+	v3, err := u3.LoadFile("file3")
+	if err != nil {
+		t.Error("Failed to load shared file from other instance of user")
+		return
+	}
+	if !reflect.DeepEqual(v, v3) {
+		t.Error("loaded data not same as shared file", string(v), string(v3))
+		return
+	}
+}
+
 //Test that makes sure don't try to share with user that doesnt exist
 func TestShareExist(t *testing.T) {
 	clear()

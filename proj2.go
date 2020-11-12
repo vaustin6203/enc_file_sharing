@@ -935,6 +935,13 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 // it is authentically from the sender.
 func (userdata *User) ReceiveFile(filename string, sender string,
 	magic_string string) error {
+	mapEntry, _, _, err := sharedOrExists(userdata, filename)
+	if err != nil {
+		return err
+	} else if mapEntry != nil {
+		return errors.New(strings.ToTitle("filename already exist under user"))
+	}
+
 	//extract Share UUID from token
 	VerifyKey, ok := userlib.KeystoreGet(sender)
 	if !ok {
@@ -942,7 +949,7 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 	}
 
 	var mtoken [][]byte
-	err := json.Unmarshal([]byte(magic_string), &mtoken)
+	err = json.Unmarshal([]byte(magic_string), &mtoken)
 	if err != nil {
 		return err
 	}
