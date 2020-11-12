@@ -769,3 +769,244 @@ func TestRevoke(t *testing.T) {
 	}
 	t.Log("Received error:", err)
 }
+
+//Tests if return error if not a direct child of parent
+func TestRevokeDirectChild(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	u3, err := InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+
+	magic_string, err = u2.ShareFile("file2", "jane")
+	if err != nil {
+		t.Error("Failed to share the file2", err)
+		return
+	}
+
+	err = u3.ReceiveFile("file3", "bob", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for jane", err)
+		return
+	}
+
+	err = u.RevokeFile("file1", "jane")
+	if err == nil {
+		t.Error("Revoking user that is not direct child should error")
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Tests if user who doesn't have access is able to revoke file from user
+func TestInvalidRevoke(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	u3, err := InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	err = u3.RevokeFile("file1", "bob")
+	if err == nil {
+		t.Error("user without access to file revoked access to a user")
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Test if try to revoke file that doesn't exist
+func TestRevokeExist(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	err = u.RevokeFile("file8", "bob")
+	if err == nil {
+		t.Error("tried to revoke a file that doesn't exist")
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Test if Revoke returns error if target doesn't have access to file
+func TestRevokeAccess(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	_, err = InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	err = u.RevokeFile("file1", "jane")
+	if err == nil {
+		t.Error("tried to revoke access from user who already doesn't have access")
+		return
+	}
+	t.Log("got error", err)
+}
+
+//Test that user other than root can revoke access to children
+//and children not decendents of target remain unaffected
+func TestRevokeShared(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	u3, err := InitUser("jane", "fubar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+	u4, err := InitUser("tom", "foobar1")
+	if err != nil {
+		t.Error("Failed to initialize jane", err)
+		return
+	}
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	magic_string, err = u.ShareFile("file1", "jane")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u3.ReceiveFile("file3", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for jane", err)
+		return
+	}
+	magic_string, err = u2.ShareFile("file2", "tom")
+	if err != nil {
+		t.Error("Failed to share the file2", err)
+		return
+	}
+	err = u4.ReceiveFile("file4", "bob", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for tom", err)
+		return
+	}
+	err = u2.RevokeFile("file2", "tom")
+	if err != nil {
+		t.Error("bob was unable to revoke from tom")
+		return
+	}
+	_, err = u3.LoadFile("file3")
+	if err != nil {
+		t.Error("member of share tree was illegally revoked")
+		return
+	}
+}
