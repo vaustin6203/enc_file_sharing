@@ -182,6 +182,42 @@ func TestStoreFile(t *testing.T) {
 	}
 }
 
+//Tests that to users can store files with the same name
+//without triggering an error
+func Test_FileName(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	u1, err := InitUser("tori", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	v1 := []byte("this is file data")
+	u1.StoreFile("file1", v1)
+	v := []byte("this is file data for another file")
+	u.StoreFile("file1", v)
+
+	v1_load, err2 := u1.LoadFile("file1")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+	v_load, err2 := u.LoadFile("file1")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+
+	if reflect.DeepEqual(v1_load, v_load) {
+		t.Error("files under same name with different contents were identical", string(v1_load), string(v_load))
+		return
+	}
+}
+
 //Tests if another instance of a user makes a new file,
 //the original user has access to the file
 func Test_StoreFiles(t *testing.T) {
