@@ -1009,4 +1009,32 @@ func TestRevokeShared(t *testing.T) {
 		t.Error("member of share tree was illegally revoked")
 		return
 	}
+	apData2 := []byte(" this is appended data")
+	err = u4.AppendFile("file4", apData2)
+	if err == nil {
+		t.Error("Revoked user was able to append to file")
+	}
+	t.Log("got error", err)
 }
+
+//checks that if user contents get modified, we are able to catch it
+func TestModifyDatastore(t *testing.T) {
+	clear()
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	datastore_map := userlib.DatastoreGetMap()
+	for UUID, contents := range datastore_map {
+		contents = append(contents, byte('i'))
+		userlib.DatastoreSet(UUID, contents)
+	}
+	_, err = GetUser("alice", "fubar")
+	if err == nil {
+		t.Error("user was modified and was supposed to error")
+		return
+	}
+	t.Log("got error", err)
+}
+
