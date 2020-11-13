@@ -199,63 +199,6 @@ func addUser2Datastore(userdata *User) (err error) {
 	return nil
 }
 
-//Helper function: adds data to DataStore that uses asymetric encryption
-//Note: data arg must already be marshalled 
-func addFile2Datastore(UUID uuid.UUID, HMACKey []byte, 
-	SymKey []byte, file []byte, data []byte) {
-	iv1 := userlib.RandomBytes(userlib.AESBlockSize)
-	PaddedFile := padData(file)
-	iv2 := userlib.RandomBytes(userlib.AESBlockSize)
-	PaddedData := padData(data)
-	EncFile := userlib.SymEnc(SymKey, iv1, PaddedFile)
-	EncData := userlib.SymEnc(SymKey, iv2, PaddedData)
-
-	DataFile := [][]byte{EncData, EncFile}
-	mDataFile, _ := json.Marshal(DataFile)
-
-	mac, _ := userlib.HMACEval(HMACKey, mDataFile)
-
-	Package := [][]byte{mDataFile, mac}
-	mPackage, _ := json.Marshal(Package)
-
-	userlib.DatastoreSet(UUID, mPackage)
-
-	return
-}
-
-//Helper function: given a user's mapEntry of a file, retreives, verfies, 
-//& decrypts file and its data
-//returns error if error occurs 
-func getFile(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (file File, data []byte, err error) {
-	var filedata [][]byte
-
-	EncData, ok := userlib.DatastoreGet(UUID)
-	if !ok {
-		return file, data, errors.New("Data not found!")
-	}
-
-	EncData, err = verify(EncData, HMACKey)
-	if err != nil {
-		return file, data, err
-	}
-
-	err = json.Unmarshal(EncData, &filedata)
-	if err != nil {
-		return file, data, err
-	}
-
-	DecFile := userlib.SymDec(SymKey, filedata[1])
-	depadFile := dePadData(DecFile)
-	err = json.Unmarshal(depadFile, &file)
-	if err != nil {
-		return file, data, err
-	}
-
-	DecData := userlib.SymDec(SymKey, filedata[0])
-	depadData := dePadData(DecData)
-	return file, depadData, nil
-}
-
 //Helper function: verifies integrity of data loaded from Datastore
 //returns false if data has been tampered with
 func checkIntegrity(data []byte, mac []byte, HMACKey []byte) (ok bool) {
@@ -434,7 +377,6 @@ func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, e
 	return HMACKey[:16], SymKey[:16], nil
 }
 
-
 // //initializes a Share struct for the recipient and returns the UUID and RSA decryption key of
 // //the Share struct in order to generate the access token
 func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid.UUID, err error) {
@@ -502,10 +444,9 @@ type User struct {
 	AppendedData [][]byte
 }
 
-//file record
 type File struct {
-	Username string
 	ShareTree map[string][][]byte
+	Data []byte
 }
 
 //a record of a shared file between 2 users 
@@ -670,35 +611,28 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 			}
 		}
 
-		file, ok := userlib.DatastoreGet(UUID)
-		if !ok {
-			return 
-		}
-
-		file, err = verify(file, HMACKey)
+		mfile, err := decAndVerify(UUID, HMACKey, SymKey)
 		if err != nil {
-			HMACKey, SymKey = genFileKeys()
+			return
 		}
-
-		var filedata [][]byte
-		_ = json.Unmarshal(file, &filedata)
-		DecFile := userlib.SymDec(SymKey, filedata[1])
-		depadFile := dePadData(DecFile)
-
-		addFile2Datastore(UUID, HMACKey, SymKey, depadFile, data)
+		var file File
+		_ = json.Unmarshal(mfile, &file)
+		file.Data = data
+		mfile, _  = json.Marshal(file)
+		add2Datastore(UUID, HMACKey, SymKey, mfile)
 
 	} else {
-		var userfile File
-		userfile.Username = userdata.Username
-		userfile.ShareTree = make(map[string][][]byte)
+		var file File
+		file.ShareTree = make(map[string][][]byte)
+		file.Data = data
 		UUID := uuid.New()
 		HMACKey, SymKey := genFileKeys()
 
 		Map[filename] = [][]byte{uuidToBytes(UUID), HMACKey, SymKey}
-		file, _ := json.Marshal(userfile)
+		mfile, _ := json.Marshal(file)
 		mfilemap, _ := json.Marshal(Map)
 		_ = add2Datastore(bytesToUUID(userdata.Files[0]), userdata.Files[1], userdata.Files[2], mfilemap)
-		addFile2Datastore(UUID, HMACKey, SymKey, file, data)
+		_ = add2Datastore(UUID, HMACKey, SymKey, mfile)
 
 		//Add entry in AppendMap for new file
 		RootKey := userlib.RandomBytes(16)
@@ -808,10 +742,13 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 			SymKey = share.SymKeyFile
 		}
 
-	_, filedata, err := getFile(UUID, HMACKey, SymKey)
+	mfile, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
 		return nil, err
 	}
+	var file File
+	_ = json.Unmarshal(mfile, &file)
+	filedata := file.Data
 
 	apmap, err := getAppendedMap(ApUUID, ApHMAC, ApSym)
 	if err != nil {
@@ -868,10 +805,12 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 		AppendedData = share.AppendedData
 	}
 
-	file, filedata, err := getFile(UUID, HMACKey, SymKey)
+	mfile, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
 		return magic_string, err
 	}
+	var file File
+	_ = json.Unmarshal(mfile, &file)
 
 	//generate Share struct
 	ShareUUID, err := initShare(mapEntry, AppendedData, recipient)
@@ -884,11 +823,11 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 		return magic_string, errors.New("file has already been shared with recipient")
 	}
 	file.ShareTree[recipient] = [][]byte{[]byte(userdata.Username), uuidToBytes(ShareUUID)}
-	mfile, err := json.Marshal(file)
+	mfile, err = json.Marshal(file)
 	if err != nil {
 		return magic_string, err
 	}
-	addFile2Datastore(UUID, HMACKey, SymKey, mfile, filedata)
+	_ = add2Datastore(UUID, HMACKey, SymKey, mfile)
 
 	//generate token
 	mtoken, err := json.Marshal(ShareUUID)
@@ -991,10 +930,12 @@ func (userdata *User) RevokeFile(filename string, target_username string) (err e
 		SymKey = share.SymKeyFile
 	}
 
-	file, filedata, err := getFile(UUID, HMACKey, SymKey)
+	mfile, err := decAndVerify(UUID, HMACKey, SymKey)
 	if err != nil {
 		return err
 	}
+	var file File
+	_ = json.Unmarshal(mfile, &file)
 
 	ShareUUID, err := isChild(file.ShareTree, userdata.Username, target_username)
 	if err != nil {
@@ -1008,6 +949,6 @@ func (userdata *User) RevokeFile(filename string, target_username string) (err e
 	if err != nil {
 		return err
 	}
-	addFile2Datastore(UUID, HMACKey, SymKey, mFile, filedata)
+	_ = add2Datastore(UUID, HMACKey, SymKey, mFile)
 	return nil
 }
