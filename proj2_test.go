@@ -1140,17 +1140,9 @@ func TestInvalidReceive(t *testing.T) {
 		t.Error("alice was unable to revoke from bob")
 		return
 	}
-	_ = u2.ReceiveFile("file3", "alice", magic_string)
-	_ = u.AppendFile("file1", v)
-	load, _ := u2.LoadFile("file3")
-
-	apv := v
-	for i := 0; i < len(v); i++ {
-		apv = append(apv, v[i])
+	err = u2.ReceiveFile("file3", "alice", magic_string)
+	if err == nil {
+		t.Error("revoked user calling ReceiveFile should error")
 	}
-
-	if reflect.DeepEqual(v, load) {
-		t.Error("loaded data should not have updates from user", string(v), string(load))
-		return
-	}
+	t.Log("got error", err)
 }
