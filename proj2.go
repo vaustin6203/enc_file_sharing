@@ -892,6 +892,11 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 	seed := token[38:]
 	ShareUUID := token[:38]
 
+	_, ok = userlib.DatastoreGet(bytesToUUID(ShareUUID))
+	if !ok {
+		return errors.New("user was revoked access to file")
+	}
+
 	HMACKey, SymKey, err := getShareKeys(seed)
 	if err != nil {
 		return err

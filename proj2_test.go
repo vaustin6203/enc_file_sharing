@@ -1109,3 +1109,48 @@ func TestModifyDatastoreFile(t *testing.T) {
 	t.Log("got error", err)
 }
 
+func TestInvalidReceive(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	err = u.RevokeFile("file1", "bob")
+	if err != nil {
+		t.Error("alice was unable to revoke from bob")
+		return
+	}
+	_ = u2.ReceiveFile("file3", "alice", magic_string)
+	_ = u.AppendFile("file1", v)
+	load, _ := u2.LoadFile("file3")
+
+	apv := v
+	for i := 0; i < len(v); i++ {
+		apv = append(apv, v[i])
+	}
+
+	if reflect.DeepEqual(v, load) {
+		t.Error("loaded data should not have updates from user", string(v), string(load))
+		return
+	}
+}
