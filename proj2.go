@@ -251,10 +251,11 @@ func decAndVerify (UUID uuid.UUID, HMACKey []byte, SymKey []byte) (data []byte, 
 
 func removeAppendedData(metadata [][]byte) (err error) {
 	NumEntries := int(metadata[1][0])
-	RootKey := metadata[0]
+	RootKey1 := metadata[0]
+	RootKey2 := metadata[2]
 
 	for i := 0; i < NumEntries; i++ {
-		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey, i)
+		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey1, RootKey2, i)
 		if err != nil {
 			return err
 		}
@@ -270,11 +271,12 @@ func removeAppendedData(metadata [][]byte) (err error) {
 
 func appendData(metadata [][]byte, data []byte) (appendedData []byte, err error) {
 	NumEntries := int(metadata[1][0])
-	RootKey := metadata[0]
+	RootKey1 := metadata[0]
+	RootKey2 := metadata[2]
 
 	appendedData = data
 	for i := 0; i < NumEntries; i++ {
-		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey, i)
+		UUID, HMACKey, SymKey, err := getAppendKeys(RootKey1, RootKey2, i)
 		if err != nil {
 			return nil, err
 		}
@@ -316,17 +318,16 @@ func getAppendedMap(UUID uuid.UUID, HMACKey []byte, SymKey []byte) (appmap map[u
 	return appmap, nil
 }
 
-func getAppendKeys(RootKey []byte, NumAppends int) (UUID uuid.UUID, HMACKey []byte, SymKey []byte, err error) {
+func getAppendKeys(RootKey1 []byte, RootKey2 []byte, NumAppends int) (UUID uuid.UUID, HMACKey []byte, SymKey []byte, err error) {
 	bNumAppends := byte(NumAppends)
-	RootKeyap := append(RootKey, bNumAppends)[1:17]
-	uuidInput := userlib.Hash(RootKeyap)
-	UUID, err = uuid.FromBytes(uuidInput[:16])
+	RootKeyap1 := append(RootKey1, bNumAppends)[1:17]
+	RootKeyap2 := append(RootKey2, bNumAppends)[1:17]
+	UUID, err = uuid.FromBytes(RootKeyap2[1:17])
 	if err != nil {
 		return UUID, HMACKey, SymKey, err
 	}
-
-	HMACKey, err = userlib.HashKDF(RootKeyap, []byte("hmac key for appended data"))
-	SymKey, err = userlib.HashKDF(RootKeyap, []byte("sym key for appended data"))
+	HMACKey, err = userlib.HashKDF(RootKeyap1, []byte("hmac key for appended data"))
+	SymKey, err = userlib.HashKDF(RootKeyap1, []byte("sym key for appended data"))
 	if err != nil {
 		return UUID, HMACKey, SymKey, err
 	}
@@ -365,10 +366,7 @@ func sharedOrExists(userdata *User, filename string) (mapEntry [][]byte, Map map
 	return mapEntry, Map, shared, nil
 }
 
-func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, err error) {
-	salt := userlib.Hash([]byte(name))
-	var bsalt []byte = salt[:]
-	RootKey := userlib.Argon2Key(uuidToBytes(UUID), bsalt, 16)
+func getShareKeys(RootKey []byte) (HMACKey []byte, SymKey []byte, err error) {
 	HMACKey, err = userlib.HashKDF(RootKey, []byte("share hmac key"))
 	SymKey, err = userlib.HashKDF(RootKey, []byte("share sym key"))
 	if err != nil {
@@ -379,7 +377,7 @@ func getShareKeys(UUID uuid.UUID, name string) (HMACKey []byte, SymKey []byte, e
 
 // //initializes a Share struct for the recipient and returns the UUID and RSA decryption key of
 // //the Share struct in order to generate the access token
-func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid.UUID, err error) {
+func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid.UUID, seed []byte, err error) {
 	var fileShare Share
 	UUID = uuid.New()
 	fileShare.HMACKeyFile = mapEntry[1]
@@ -387,22 +385,23 @@ func initShare(mapEntry [][]byte, ApEntry [][]byte, recipient string) (UUID uuid
 	fileShare.SymKeyFile = mapEntry[2]
 	fileShare.AppendedData = ApEntry
 
-	HMACKey, SymKey, err := getShareKeys(UUID, recipient)
+	seed = userlib.RandomBytes(16)
+	HMACKey, SymKey, err := getShareKeys(seed)
 	if err != nil {
-		return UUID, err
+		return UUID,seed,  err
 	}
 
 	//add Share struct to Datastore
 	data, err := json.Marshal(fileShare)
 	if err != nil {
-		return UUID, err
+		return UUID, seed, err
 	}
 
 	err = add2Datastore(UUID, HMACKey, SymKey, data)
 	if err != nil {
-		return UUID, err
+		return UUID, seed, err
 	}
-	return UUID, nil
+	return UUID, seed,nil
 }
 
 func isChild(ShareTree map[string][][]byte, username string, target string) (UUID uuid.UUID, err error) {
@@ -635,7 +634,8 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		_ = add2Datastore(UUID, HMACKey, SymKey, mfile)
 
 		//Add entry in AppendMap for new file
-		RootKey := userlib.RandomBytes(16)
+		RootKey1 := userlib.RandomBytes(16)
+		RootKey2 := userlib.RandomBytes(16)
 		AppUUID := bytesToUUID(userdata.AppendedData[0])
 		ApHmac := userdata.AppendedData[1]
 		ApSym := userdata.AppendedData[2]
@@ -643,7 +643,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		if err != nil {
 			return
 		}
-		apmap[UUID] = [][]byte{RootKey, []byte{0}}
+		apmap[UUID] = [][]byte{RootKey1, []byte{0}, RootKey2}
 		m_apmap, _ := json.Marshal(apmap)
 		_ = add2Datastore(AppUUID, ApHmac, ApSym, m_apmap)
 	}
@@ -691,15 +691,16 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	}
 
 	entry := apmap[UUID]
-	RootKey := entry[0]
+	RootKey1 := entry[0]
 	NumAppends := int(entry[1][0])
-	NewUUID, NewHMACKey, NewSymKey, err := getAppendKeys(RootKey, NumAppends)
+	RootKey2 := entry[2]
+	NewUUID, NewHMACKey, NewSymKey, err := getAppendKeys(RootKey1, RootKey2, NumAppends)
 	if err != nil {
 		return err
 	}
 
 	NumAppends += 1
-	apmap[UUID] = [][]byte{RootKey, []byte{byte(NumAppends)}}
+	apmap[UUID] = [][]byte{RootKey1, []byte{byte(NumAppends)}, RootKey2}
 	m_apmap, _ := json.Marshal(apmap)
 	err = add2Datastore(ApUUID, ApHMAC, ApSym, m_apmap)
 	if err != nil {
@@ -813,7 +814,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	_ = json.Unmarshal(mfile, &file)
 
 	//generate Share struct
-	ShareUUID, err := initShare(mapEntry, AppendedData, recipient)
+	ShareUUID, seed, err := initShare(mapEntry, AppendedData, recipient)
 	if err != nil {
 		return magic_string, err
 	}
@@ -830,12 +831,12 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	_ = add2Datastore(UUID, HMACKey, SymKey, mfile)
 
 	//generate token
-	mtoken, err := json.Marshal(ShareUUID)
-	if err != nil {
-		return magic_string, err
+	token := uuidToBytes(ShareUUID)
+	for i := 0; i < len(seed); i++ {
+		token = append(token, seed[i])
 	}
 
-	EncToken, err := userlib.PKEEnc(tokenEncKey, mtoken)
+	EncToken, err := userlib.PKEEnc(tokenEncKey, token)
 	if err != nil {
 		return magic_string, err
 	}
@@ -884,12 +885,14 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 		return err
 	}
 
-	ShareUUID, err := userlib.PKEDec(userdata.RSADecKey, mtoken[0])
+	token, err := userlib.PKEDec(userdata.RSADecKey, mtoken[0])
 	if err != nil {
 		return err
 	}
+	seed := token[38:]
+	ShareUUID := token[:38]
 
-	HMACKey, SymKey, err := getShareKeys(bytesToUUID(ShareUUID), userdata.Username)
+	HMACKey, SymKey, err := getShareKeys(seed)
 	if err != nil {
 		return err
 	}
