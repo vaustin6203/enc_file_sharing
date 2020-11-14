@@ -1079,36 +1079,6 @@ func TestModifyDatastoreUser(t *testing.T) {
 	t.Log("got error", err)
 }
 
-//checks that if file contents get modified, we are able to catch it
-func TestModifyDatastoreFile(t *testing.T) {
-	clear()
-	u, err := InitUser("alice", "fubar")
-	if err != nil {
-		t.Error("Failed to initialize alice", err)
-		return
-	}
-	v := []byte("This is a test")
-	u.StoreFile("file1", v)
-
-	datastore_map := userlib.DatastoreGetMap()
-	i := 0
-	for UUID, contents := range datastore_map {
-		if i != 0 {
-			contents = append(contents, byte('i'))
-			userlib.DatastoreSet(UUID, contents)
-		}
-		i ++
-	}
-	v1 := []byte("new data")
-	u.StoreFile("file1", v1)
-
-	_, err = u.LoadFile("file1")
-	if err == nil {
-		t.Error("was able to load invalid data")
-	}
-	t.Log("got error", err)
-}
-
 //tests if revoked user can regain access to file
 //by calling ReceiveFile with same token
 func TestInvalidReceive(t *testing.T) {
