@@ -1117,7 +1117,7 @@ func TestModifyDatastoreFile(t *testing.T) {
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
-	_, err = u3.LoadFile("file1")
+	err = u3.AppendFile("file1", v1)
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
