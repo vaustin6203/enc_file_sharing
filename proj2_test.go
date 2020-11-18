@@ -1087,8 +1087,17 @@ func TestModifyDatastoreFile(t *testing.T) {
 		t.Error("Failed to initialize alice", err)
 		return
 	}
+	u2, err :=GetUser("alice", "fubar")
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
+
+	u3, err := GetUser("alice", "fubar")
+	v3 := []byte("This is a testerhth")
+	u3.StoreFile("file1", v3)
+
+	u4, err := GetUser("alice", "fubar")
+	v4 := []byte("This is a testerhthryhj6o4wyjp5ow46")
+	u4.StoreFile("file1", v4)
 
 	datastore_map := userlib.DatastoreGetMap()
 	i := 0
@@ -1101,8 +1110,18 @@ func TestModifyDatastoreFile(t *testing.T) {
 	}
 	v1 := []byte("new data")
 	u.StoreFile("file1", v1)
+	u3.StoreFile("file1", v3)
+	u4.StoreFile("file1", v4)
 
-	_, err = u.LoadFile("file1")
+	_, err = u2.LoadFile("file1")
+	if err == nil {
+		t.Error("was able to load invalid data")
+	}
+	_, err = u3.LoadFile("file1")
+	if err == nil {
+		t.Error("was able to load invalid data")
+	}
+	_, err = u4.LoadFile("file1")
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
@@ -1111,40 +1130,40 @@ func TestModifyDatastoreFile(t *testing.T) {
 
 //tests if revoked user can regain access to file
 //by calling ReceiveFile with same token
-//func TestInvalidReceive(t *testing.T) {
-//	clear()
-//	u, err := InitUser("alice", "fubar")
-//	if err != nil {
-//		t.Error("Failed to initialize alice", err)
-//		return
-//	}
-//	u2, err := InitUser("bob", "foobar")
-//	if err != nil {
-//		t.Error("Failed to initialize bob", err)
-//		return
-//	}
-//	v := []byte("This is a test")
-//	u.StoreFile("file1", v)
-//	var magic_string string
-//
-//	magic_string, err = u.ShareFile("file1", "bob")
-//	if err != nil {
-//		t.Error("Failed to share the file1", err)
-//		return
-//	}
-//	err = u2.ReceiveFile("file2", "alice", magic_string)
-//	if err != nil {
-//		t.Error("Failed to receive the share message for bob", err)
-//		return
-//	}
-//	err = u.RevokeFile("file1", "bob")
-//	if err != nil {
-//		t.Error("alice was unable to revoke from bob")
-//		return
-//	}
-//	err = u2.ReceiveFile("file3", "alice", magic_string)
-//	if err == nil {
-//		t.Error("revoked user calling ReceiveFile should error")
-//	}
-//	t.Log("got error", err)
-//}
+func TestInvalidReceive(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	u2, err := InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize bob", err)
+		return
+	}
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+	var magic_string string
+
+	magic_string, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the file1", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", magic_string)
+	if err != nil {
+		t.Error("Failed to receive the share message for bob", err)
+		return
+	}
+	err = u.RevokeFile("file1", "bob")
+	if err != nil {
+		t.Error("alice was unable to revoke from bob")
+		return
+	}
+	err = u2.ReceiveFile("file3", "alice", magic_string)
+	if err == nil {
+		t.Error("revoked user calling ReceiveFile should error")
+	}
+	t.Log("got error", err)
+}
