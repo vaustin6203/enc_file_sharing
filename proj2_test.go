@@ -1121,7 +1121,12 @@ func TestModifyDatastoreFile(t *testing.T) {
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
-	_, err = u4.LoadFile("file1")
+	_, err = InitUser("bob", "foobar")
+	if err != nil {
+		t.Error("Failed to initialize alice", err)
+		return
+	}
+	_, err = u4.ShareFile("file1", "bob")
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
