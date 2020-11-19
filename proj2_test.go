@@ -433,7 +433,25 @@ func TestShare(t *testing.T) {
 		t.Error("Shared file is not the same", v, v2)
 		return
 	}
-
+	v3 := []byte("This is a testegj5ojgkrtjrj")
+	u.StoreFile("file1", v3)
+	a, err := u2.LoadFile("file2")
+	if err != nil {
+		t.Error("Shared user lost access after file was overwritten", err)
+		return
+	}
+	v4 := []byte("Thikremhkl;5rtmeh;lrt5")
+	u2.StoreFile("file1", v4)
+	u4, _ := GetUser("bob", "foobar")
+	b, err := u4.LoadFile("file1")
+	if err != nil {
+		t.Error("Different user wasn't to create a file who's name exists under another user", err)
+		return
+	}
+	if reflect.DeepEqual(a, b) {
+		t.Error("files with same name should have different contents", a, b)
+		return
+	}
 }
 
 //Tests that user with shared file is able to load appended data
@@ -1129,11 +1147,7 @@ func TestModifyDatastoreFile(t *testing.T) {
 	if err == nil {
 		t.Error("was able to load invalid data")
 	}
-	_, err = InitUser("bob", "foobar")
-	if err != nil {
-		t.Error("Failed to initialize alice", err)
-		return
-	}
+
 	_, err = u4.ShareFile("file1", "bob")
 	if err == nil {
 		t.Error("was able to load invalid data")
